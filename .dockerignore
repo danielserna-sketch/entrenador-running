@@ -1,0 +1,8 @@
+.venv
+.git
+cdk.out
+infra
+tests
+scripts
+**/__pycache__
+*.json.tokens

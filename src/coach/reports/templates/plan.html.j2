@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Plan de entrenamiento v{{ version }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1f2933;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;">
+<tr><td align="center" style="padding:16px 8px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;background:#ffffff;border-radius:12px;overflow:hidden;">
+
+  <!-- Encabezado -->
+  <tr><td style="background:#111827;color:#ffffff;padding:24px 24px 20px;">
+    <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;">Corriendo conCiencia · Plan v{{ version }} · {{ today }}</div>
+    <div style="font-size:24px;font-weight:700;margin-top:6px;">{{ goal.distance }}{% if goal.race_name %} · {{ goal.race_name }}{% endif %}</div>
+    <div style="font-size:14px;color:#d1d5db;margin-top:6px;">
+      Carrera: <b style="color:#fff;">{{ goal.race_date }}</b> · Objetivo: <b style="color:#fff;">{{ goal.goal_time }}</b> · Faltan <b style="color:#fff;">{{ goal.weeks_left }}</b> semanas
+    </div>
+    {% if current_week %}
+    <div style="margin-top:12px;display:inline-block;background:#1f2937;border-radius:999px;padding:6px 12px;font-size:13px;">
+      Semana {{ current_week.index }} de {{ weeks|length }} · Fase <b>{{ current_week.phase_label }}</b> · {{ current_week.kind }}
+    </div>
+    {% endif %}
+  </td></tr>
+
+  <!-- Motivo de la actualización -->
+  <tr><td style="padding:16px 24px 0;">
+    <div style="background:#eef2ff;border-left:4px solid #4f46e5;padding:10px 12px;border-radius:6px;font-size:14px;">
+      <b>¿Por qué esta versión?</b> {{ reason }}
+    </div>
+    {% for w in warnings %}
+    <div style="background:#fff7ed;border-left:4px solid #f97316;padding:8px 12px;border-radius:6px;font-size:13px;margin-top:8px;">⚠️ {{ w }}</div>
+    {% endfor %}
+  </td></tr>
+
+  <!-- Línea de tiempo -->
+  <tr><td style="padding:20px 24px 4px;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:8px;">Ciclos del plan</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+      <tr>
+      {% for p in timeline %}
+        <td width="{{ p.pct }}%" style="background:{{ p.color }};height:26px;font-size:11px;text-align:center;color:#111827;border-right:2px solid #fff;">{{ p.label }} ({{ p.weeks }})</td>
+      {% endfor %}
+      </tr>
+    </table>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td width="{{ marker_pct }}%" style="font-size:0;line-height:0;">&nbsp;</td>
+      <td style="font-size:11px;color:#4f46e5;font-weight:700;white-space:nowrap;">▲ estás aquí</td>
+    </tr></table>
+  </td></tr>
+
+  <!-- Gráficas -->
+  <tr><td style="padding:16px 24px 0;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;">Carga semanal: planeado vs realizado</div>
+    <img src="{{ img.tss }}" width="632" alt="TSS planeado vs realizado" style="width:100%;max-width:632px;height:auto;display:block;">
+    {% if has_fitness %}
+    <div style="font-size:16px;font-weight:700;margin:16px 0 4px;">Forma, fatiga y frescura</div>
+    <img src="{{ img.fitness }}" width="632" alt="CTL, ATL y TSB" style="width:100%;max-width:632px;height:auto;display:block;">
+    {% endif %}
+    {% if has_cadence %}
+    <div style="font-size:16px;font-weight:700;margin:16px 0 4px;">Tendencia de cadencia</div>
+    <img src="{{ img.cadence }}" width="632" alt="Cadencia" style="width:100%;max-width:632px;height:auto;display:block;">
+    {% endif %}
+  </td></tr>
+
+  <!-- Zonas -->
+  {% if zones %}
+  <tr><td style="padding:20px 24px 0;">
+    <div style="font-size:16px;font-weight:700;">Tus zonas (Joe Friel)</div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:8px;">Umbral: {{ zones.threshold_pace or '—' }} min/km · {{ zones.threshold_hr|round|int if zones.threshold_hr else '—' }} ppm · actualizado {{ zones.updated }}</div>
+    <table role="presentation" width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px;">
+      <tr style="background:#f9fafb;color:#6b7280;"><td>Zona</td><td>Pace (min/km)</td><td>FC (ppm)</td></tr>
+      {% for z in zones.pace or zones.hr %}
+      {% set hr = (zones.hr|selectattr('zone','equalto',z.zone)|list|first) if zones.hr else None %}
+      <tr style="border-top:1px solid #f3f4f6;">
+        <td><b>{{ z.zone }}</b></td>
+        <td>{% if z.fast %}{{ z.fast }} – {{ z.slow }}{% else %}—{% endif %}</td>
+        <td>{% if hr %}{{ hr.min_bpm }} – {{ hr.max_bpm }}{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </td></tr>
+  {% endif %}
+
+  <!-- Calendario -->
+  <tr><td style="padding:20px 24px 0;">
+    <div style="font-size:16px;font-weight:700;">Calendario semana a semana</div>
+    <div style="font-size:12px;color:#6b7280;margin:4px 0 8px;">
+      {% for hex, name, desc in compliance_legend %}<span style="display:inline-block;margin-right:10px;"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{{ hex }};"></span> {{ desc }}</span>{% endfor %}
+    </div>
+    {% for w in weeks %}
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:10px;border:1px solid {{ '#4f46e5' if w.is_current else '#e5e7eb' }};border-radius:8px;">
+      <tr><td style="padding:8px 10px;background:{{ '#eef2ff' if w.is_current else '#f9fafb' }};font-size:13px;">
+        <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:{{ w.color }};"></span>
+        <b>Semana {{ w.index }}</b> · {{ w.week_start }} · {{ w.phase_label }} · {{ w.kind }}
+        <span style="float:right;color:#6b7280;">TSS {{ w.target_tss }}{% if w.actual_tss is not none %} · real {{ w.actual_tss|round|int }}{% endif %}</span>
+      </td></tr>
+      {% if w.summary %}<tr><td style="padding:6px 10px 0;font-size:12px;color:#4b5563;">{{ w.summary }}</td></tr>{% endif %}
+      {% if w.sessions %}
+      <tr><td style="padding:6px 10px 8px;">
+        <table role="presentation" width="100%" cellpadding="4" cellspacing="0" style="border-collapse:collapse;font-size:12px;">
+          {% for s in w.sessions %}
+          <tr style="border-top:1px solid #f3f4f6;">
+            <td width="14" valign="top">{% if s.color %}<span title="{{ s.color_label }}" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{{ s.color }};"></span>{% else %}<span style="display:inline-block;width:10px;height:10px;border-radius:50%;border:1px solid #d1d5db;"></span>{% endif %}</td>
+            <td width="56" valign="top" style="color:#6b7280;">{{ s.day }}</td>
+            <td valign="top"><b>{{ s.title }}</b> <span style="color:#6b7280;">· {{ s.type }}{% if s.zone %} · {{ s.zone }}{% endif %}</span>
+              {% if s.cadence %}<br><span style="color:#4f46e5;">Metrónomo {{ s.cadence.metronome_bpm }} bpm ({{ s.cadence.target_rpm }} rpm)</span>{% endif %}</td>
+            <td width="70" valign="top" align="right" style="color:#6b7280;">{% if s.duration %}{{ s.duration|round|int }} min{% endif %}<br>{% if s.tss %}TSS {{ s.tss|round|int }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </td></tr>
+      {% endif %}
+    </table>
+    {% endfor %}
+  </td></tr>
+
+  <!-- Cambios e hitos -->
+  <tr><td style="padding:12px 24px 0;">
+    {% if changes %}
+    <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Cambios recientes</div>
+    <ul style="margin:0 0 12px 18px;padding:0;font-size:13px;">
+      {% for c in changes|reverse %}<li style="margin-bottom:4px;"><b>{{ c.date }}</b>: {{ c.text }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+    <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Próximos hitos</div>
+    <ul style="margin:0 0 12px 18px;padding:0;font-size:13px;">
+      {% for m in milestones %}<li>{{ m.date }}: {{ m.label }}</li>{% endfor %}
+    </ul>
+  </td></tr>
+
+  <tr><td style="padding:16px 24px 24px;font-size:11px;color:#9ca3af;border-top:1px solid #f3f4f6;">
+    Plan basado en la metodología Corriendo conCiencia (Andrés Ramírez). Generado por tu entrenador IA{% if previous_version %} · reemplaza la versión {{ previous_version }}{% endif %}.
+    Escríbele por WhatsApp "envíame el plan" para recibir la versión más reciente.
+  </td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>
