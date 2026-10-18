@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable
 from datetime import date, timedelta
 
+from coach.agent.athlete_profile import REQUIRED_PROFILE
 from coach.analytics import compliance, load, wellness
 from coach.garmin.provider import GarminProvider
 from coach.llm.base import LLMClient, SystemPrompt
@@ -16,7 +17,6 @@ from coach.storage.repo import Repo
 
 log = logging.getLogger(__name__)
 
-REQUIRED_PROFILE = ["goal_distance", "race_date", "days_available"]
 
 
 class PlanService:

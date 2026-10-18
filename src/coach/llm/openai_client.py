@@ -64,7 +64,10 @@ class OpenAISession:
         response = self.llm.client.chat.completions.create(**kwargs)
         choice = response.choices[0]
         message = choice.message
-        usage = {"input": response.usage.prompt_tokens, "output": response.usage.completion_tokens}
+        # prompt_tokens incluye los cacheados; cache_read dice cuántos salieron de la caché.
+        details = getattr(response.usage, "prompt_tokens_details", None)
+        usage = {"input": response.usage.prompt_tokens, "output": response.usage.completion_tokens,
+                 "cache_read": getattr(details, "cached_tokens", 0) or 0}
         if getattr(message, "refusal", None):
             return StepResult(text="", stop_reason="refusal", usage=usage)
 
