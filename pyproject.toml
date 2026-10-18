@@ -19,6 +19,7 @@ dev = [
     "pytest>=8",
     "moto[dynamodb,s3,secretsmanager,ses,sqs]>=5",
     "ruff>=0.5",
+    "fitdecode>=0.11.0",
 ]
 infra = [
     "aws-cdk-lib>=2.150",

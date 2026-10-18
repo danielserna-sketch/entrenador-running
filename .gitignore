@@ -8,3 +8,6 @@ cdk.out/
 garmin_tokens*.json
 .env
 strava*.json
+
+# Exportaciones personales (Strava, GPS)
+Contexto/

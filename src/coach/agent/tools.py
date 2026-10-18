@@ -308,16 +308,22 @@ def _with_strings(value: Any) -> Any:
 
 
 def _no_strava_data(ctx: ToolContext) -> dict | None:
-    if ctx.repo.get_strava_sync().get("listed_until"):
+    if ctx.repo.query_prefix("STRAVA_ACTIVITY#", limit=1):
         return None
-    return {"error": "Todavía no hay historial de Strava. Hay que conectar la cuenta con "
-                     "scripts/strava_login.py y esperar la primera sincronización."}
+    return {"error": "Todavía no hay historial de Strava. Hay que cargar el archivo exportado con "
+                     "scripts/import_strava_export.py (o conectar la API con scripts/strava_login.py)."}
 
 
 def _strava_status(ctx: ToolContext) -> dict:
     state = ctx.repo.get_strava_sync()
-    return {"historial_completo": bool(state.get("backfill_done")),
-            "carreras_pendientes_de_detalle": len(state.get("pending") or [])}
+    export = ctx.repo.get("META#strava_export") or {}
+    out = {"historial_hasta": export.get("last_activity")}
+    if state.get("listed_until"):
+        out.update({"api_historial_completo": bool(state.get("backfill_done")),
+                    "carreras_pendientes_de_detalle": len(state.get("pending") or [])})
+    elif export:
+        out["fuente"] = f"archivo de Strava importado el {export.get('imported_on')}"
+    return out
 
 
 def get_personal_records(ctx: ToolContext, args: dict) -> Any:

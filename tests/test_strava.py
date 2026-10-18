@@ -211,3 +211,80 @@ def test_record_tool(repo):
 
     out, is_error = run_tool(ctx, "get_training_history", {})
     assert not is_error and json.loads(out)["por_periodo"][0]["period"] == "2026"
+
+
+# ---------------------------------------------------------------------------- archivo exportado
+def test_best_efforts_from_track():
+    from coach.strava.export import best_efforts, km_splits
+
+    # 6 km: 3 km a 5:00/km y luego 3 km a 4:00/km, un punto por segundo
+    track, t, d = [], 0.0, 0.0
+    for speed, secs in ((1000 / 300, 900), (1000 / 240, 720)):
+        for _ in range(secs):
+            t += 1
+            d += speed
+            track.append((t, d, 150))
+    efforts = best_efforts([(0.0, 0.0, None), *track])
+    assert efforts["1k"] == pytest.approx(240, abs=1)
+    assert efforts["5k"] == pytest.approx(3 * 240 + 2 * 300, abs=1)
+    assert "10k" not in efforts
+    splits = km_splits(track)
+    assert len(splits) >= 5 and splits[0]["pace_s_per_km"] == pytest.approx(300, abs=1)
+    assert splits[-1]["avg_hr"] == 150
+
+
+def _export_csv(rows: list[list[str]]) -> str:
+    import csv
+    import io
+
+    header = [""] * 103
+    header[0], header[3] = "ID de actividad", "Tipo de actividad"
+    buf = io.StringIO()
+    csv.writer(buf).writerows([header, *rows])
+    return buf.getvalue()
+
+
+def _row(**values) -> list[str]:
+    from coach.strava.export import COL
+
+    row = [""] * 103
+    for key, value in values.items():
+        row[COL[key]] = str(value)
+    return row
+
+
+def test_import_export_folder(tmp_path):
+    from zoneinfo import ZoneInfo
+
+    from coach.strava.export import iter_activities, parse_date
+
+    assert parse_date("20 sept 2026, 13:13:35").isoformat() == "2026-09-20T13:13:35+00:00"
+    assert parse_date("Sep 20, 2026, 1:13:35 PM").hour == 13
+
+    # GPX de 1.2 km hacia el norte, 1 punto cada 3 s a ~3.33 m/s
+    pts = "".join(
+        f'<trkpt lat="{4.9 + i * 10 / 111195:.7f}" lon="-74.0"><time>2026-09-20T13:{13 + (i * 3) // 60:02d}:'
+        f'{(35 + i * 3) % 60:02d}Z</time><extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>150'
+        f'</gpxtpx:hr></gpxtpx:TrackPointExtension></extensions></trkpt>'
+        for i in range(121))
+    (tmp_path / "activities").mkdir()
+    (tmp_path / "activities" / "1.gpx").write_text(
+        '<?xml version="1.0"?><gpx xmlns="http://www.topografix.com/GPX/1/1" '
+        'xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1"><trk><trkseg>'
+        f"{pts}</trkseg></trk></gpx>")
+    (tmp_path / "activities.csv").write_text(_export_csv([
+        _row(id="77", date="20 sept 2026, 13:13:35", name="Rodaje", type="Carrera", filename="activities/1.gpx",
+             elapsed_s="370.0", moving_s="360.0", distance_m="1200.0", avg_speed="3.333", avg_cadence="82.0",
+             avg_hr="150.0", relative_effort="12.0"),
+        _row(id="78", date="21 sept 2026, 0:30:00", name="Bici", type="Bicicleta", distance_m="20000.0",
+             moving_s="3600.0", avg_speed="5.55", avg_cadence="85.0"),
+    ]))
+
+    run, ride = list(iter_activities(tmp_path, ZoneInfo("America/Bogota")))
+    assert run["sport"] == "running" and run["date"] == "2026-09-20" and run["start_local"] == "2026-09-20T08:13:35"
+    assert run["distance_km"] == 1.2 and run["avg_pace_s_per_km"] == 300.0 and run["avg_cadence_spm"] == 164
+    assert run["detailed"] and run["best_efforts"][0]["distance"] == "400m"
+    assert {e["distance"] for e in run["best_efforts"]} >= {"400m", "1k"}
+    assert run["best_efforts"][-1]["elapsed_s"] == pytest.approx(300, abs=3)
+    # Una actividad de la noche en UTC cae el día anterior en hora local.
+    assert ride["sport"] == "ride" and ride["date"] == "2026-09-20" and ride["avg_cadence_spm"] == 85

@@ -57,7 +57,13 @@ Al terminar:
    ```bash
    uv run python scripts/garmin_login.py
    ```
-5. **Strava** (opcional, una vez): crea una app en [strava.com/settings/api](https://www.strava.com/settings/api) con *Authorization Callback Domain* = `localhost` y luego:
+5. **Historial de Strava sin pagar la API** (recomendado): en Strava → Configuración → Mi cuenta → *Descargar o eliminar tu cuenta* → *Solicitar tu archivo*. Descomprímelo en `Contexto/` (está en `.gitignore`) y cárgalo:
+   ```bash
+   uv run python scripts/import_strava_export.py Contexto
+   ```
+   Lee `activities.csv` y los tracks FIT/GPX, calcula tus mejores esfuerzos (400 m a maratón) y splits por km, y los guarda para el agente. Puedes repetirlo con un archivo más nuevo sin duplicar nada.
+
+   **API de Strava** (opcional; desde junio de 2026 exige la suscripción de Strava): crea una app en [strava.com/settings/api](https://www.strava.com/settings/api) con *Authorization Callback Domain* = `localhost` y luego:
    ```bash
    uv run python scripts/strava_login.py
    ```
