@@ -66,7 +66,7 @@ class Repo:
         return _strip(item) if item else None
 
     def query_prefix(self, prefix: str, *, start: str | None = None, end: str | None = None,
-                     newest_first: bool = False, limit: int | None = None) -> list[dict]:
+                     newest_first: bool = False, limit: int | None = None, with_sk: bool = False) -> list[dict]:
         if start or end:
             cond = Key("PK").eq(self.pk) & Key("SK").between(
                 f"{prefix}{start or ''}", f"{prefix}{end or ''}￿"
@@ -79,7 +79,7 @@ class Repo:
         items: list[dict] = []
         while True:
             resp = self.table.query(**kwargs)
-            items.extend(_strip(i) for i in resp["Items"])
+            items.extend({**_strip(i), "sk": i["SK"]} if with_sk else _strip(i) for i in resp["Items"])
             if limit and len(items) >= limit:
                 return items[:limit]
             if "LastEvaluatedKey" not in resp:
@@ -211,6 +211,22 @@ class Repo:
 
     def recent_messages(self, limit: int = 20) -> list[dict]:
         return list(reversed(self.query_prefix("MSG#", newest_first=True, limit=limit)))
+
+    def messages_since(self, anchor: str | None, limit: int = 60) -> list[dict]:
+        """Mensajes con su marca de tiempo ('ts'), desde el ancla incluida; sin ancla, los últimos `limit`.
+        El ancla puede ser una fecha (YYYY-MM-DD) o la marca de tiempo de un mensaje."""
+        if anchor:
+            items = self.query_prefix("MSG#", start=anchor, with_sk=True)
+        else:
+            items = list(reversed(self.query_prefix("MSG#", newest_first=True, limit=limit, with_sk=True)))
+        return [{**{k: v for k, v in i.items() if k != "sk"}, "ts": i["sk"].removeprefix("MSG#")} for i in items]
+
+    def get_conversation(self) -> dict:
+        """Ancla del historial y resumen de los mensajes anteriores a ella."""
+        return self.get("META#conversation") or {}
+
+    def save_conversation(self, state: dict) -> None:
+        self.put("META#conversation", state)
 
     def last_user_message_ts(self) -> float | None:
         meta = self.get("META#last_user_msg")

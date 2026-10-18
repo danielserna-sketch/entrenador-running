@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
+from coach.agent import athlete_profile
 from coach.analytics import alerts, compliance, history, load, wellness
 from coach.analytics import zones as zones_mod
 from coach.garmin.provider import GarminAuthError, GarminProvider
@@ -96,7 +97,9 @@ def get_training_load(ctx: ToolContext, args: dict) -> Any:
 
 
 def get_profile(ctx: ToolContext, args: dict) -> Any:
-    return {"perfil": ctx.repo.get_profile(), "zonas": ctx.repo.get_zones(), "memoria": ctx.repo.get_memory()}
+    memory = athlete_profile.normalize_memory(ctx.repo.get_memory())
+    return {"perfil": ctx.repo.get_profile(), "zonas": ctx.repo.get_zones(),
+            "memoria": {"hechos": athlete_profile.active_facts(memory), "resumen": memory["summary"]}}
 
 
 def get_plan(ctx: ToolContext, args: dict) -> Any:
@@ -148,11 +151,19 @@ def check_alerts(ctx: ToolContext, args: dict) -> Any:
 # ---------------------------------------------------------------------------- escritura
 def update_athlete_profile(ctx: ToolContext, args: dict) -> Any:
     changes = dict(args)
-    best = changes.pop("best_times", None)
     profile = ctx.repo.get_profile()
-    if best:
-        merged = {**profile.get("best_times", {}), **{k: v for k, v in best.items() if v}}
+    if best := changes.pop("best_times", None):
+        merged = athlete_profile.normalize_best_times(profile.get("best_times"))
+        for key, seconds in best.items():
+            if seconds:
+                merged[key] = {"tiempo_s": int(seconds), "fecha": ctx.today.isoformat(), "fuente": "atleta"}
         changes["best_times"] = merged
+    # Lesiones y notas se acumulan con fecha: un dato nuevo no borra lo que se sabía.
+    for key in ("injuries", "notes"):
+        if text := changes.pop(key, None):
+            entries = athlete_profile.normalize_entries(profile.get(key))
+            entries.append({"fecha": ctx.today.isoformat(), "texto": text})
+            changes[key] = entries[-athlete_profile.ENTRIES_MAX:]
     return {"perfil": ctx.repo.update_profile(changes)}
 
 
@@ -163,12 +174,40 @@ def log_note(ctx: ToolContext, args: dict) -> Any:
 
 
 def save_memory(ctx: ToolContext, args: dict) -> Any:
-    memory = ctx.repo.get_memory()
-    facts = memory.get("facts", [])
-    facts.append({"date": ctx.today.isoformat(), "fact": args["fact"]})
-    memory["facts"] = facts[-60:]
+    memory = athlete_profile.normalize_memory(ctx.repo.get_memory())
+    fact = {"id": athlete_profile.next_fact_id(memory["facts"]), "date": ctx.today.isoformat(),
+            "fact": args["fact"], "fuente": "chat"}
+    memory["facts"] = athlete_profile.cap_facts([*memory["facts"], fact])
     ctx.repo.save_memory(memory)
-    return {"ok": True, "total_hechos": len(memory["facts"])}
+    return {"ok": True, "id": fact["id"], "total_hechos": len(athlete_profile.active_facts(memory))}
+
+
+def _find_fact(memory: dict, fact_id: str) -> dict | None:
+    return next((f for f in athlete_profile.active_facts(memory) if f["id"] == str(fact_id)), None)
+
+
+def update_memory(ctx: ToolContext, args: dict) -> Any:
+    memory = athlete_profile.normalize_memory(ctx.repo.get_memory())
+    fact = _find_fact(memory, args["id"])
+    if not fact:
+        return {"error": f"No hay un hecho activo con id {args['id']}. Mira los ids en la ficha o en get_profile."}
+    fact.update({"fact": args["fact"], "actualizado": ctx.today.isoformat()})
+    ctx.repo.save_memory(memory)
+    return {"ok": True, "hecho": fact}
+
+
+def forget_memory(ctx: ToolContext, args: dict) -> Any:
+    """Borrado lógico: el hecho queda marcado como olvidado (auditable) y sale de la ficha."""
+    if not args.get("confirmed_by_athlete"):
+        return {"error": "Antes de olvidar un hecho, pide confirmación al atleta y vuelve a llamar con "
+                         "confirmed_by_athlete=true."}
+    memory = athlete_profile.normalize_memory(ctx.repo.get_memory())
+    fact = _find_fact(memory, args["id"])
+    if not fact:
+        return {"error": f"No hay un hecho activo con id {args['id']}."}
+    fact.update({"olvidado": ctx.today.isoformat(), "motivo": args.get("reason")})
+    ctx.repo.save_memory(memory)
+    return {"ok": True, "olvidado": fact["fact"]}
 
 
 def recalculate_zones(ctx: ToolContext, args: dict) -> Any:
@@ -523,9 +562,10 @@ TOOLS: list[Tool] = [
             "lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]}},
         "max_hours_week": {"type": "number"},
         "longest_session_min": {"type": "integer"},
-        "injuries": {"type": "string"},
+        "injuries": {"type": "string", "description": "Lesión nueva o cambio (se agrega con fecha, no reemplaza). "
+                     "Si no tiene lesiones, 'ninguna'; si se recuperó, dilo."},
         "has_power_meter": {"type": "boolean"},
-        "notes": {"type": "string"},
+        "notes": {"type": "string", "description": "Dato de contexto (se agrega con fecha, no reemplaza)."},
     })), update_athlete_profile),
     Tool(ToolSpec("log_note", "Registra sensaciones del atleta: RPE (1-10), dolor (0-10) y zona, sueño, estrés o texto.",
                   _obj({"date": {"type": "string"}, "rpe": {"type": "integer"}, "pain": {"type": "integer"},
@@ -533,6 +573,12 @@ TOOLS: list[Tool] = [
                         "activity_id": {"type": "string"}})), log_note),
     Tool(ToolSpec("save_memory", "Guarda un dato duradero del atleta para recordarlo en el futuro.",
                   _obj({"fact": {"type": "string"}}, ["fact"])), save_memory),
+    Tool(ToolSpec("update_memory", "Corrige un hecho guardado (usa el id que aparece en la ficha).",
+                  _obj({"id": {"type": "string"}, "fact": {"type": "string"}}, ["id", "fact"])), update_memory),
+    Tool(ToolSpec("forget_memory",
+                  "Olvida un hecho guardado que ya no es cierto. Solo después de que el atleta lo confirme.",
+                  _obj({"id": {"type": "string"}, "confirmed_by_athlete": {"type": "boolean"},
+                        "reason": {"type": "string"}}, ["id", "confirmed_by_athlete"])), forget_memory),
     Tool(ToolSpec("recalculate_zones",
                   "Recalcula umbrales y zonas Friel a partir de un test de 20 min (pace×1.05, FC×0.95). "
                   "Usa activity_id del test o valores manuales.",
