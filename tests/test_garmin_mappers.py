@@ -19,13 +19,20 @@ def test_map_performance_summarizes_sections():
         status={"mostRecentTrainingStatus": {"latestTrainingStatusData": {"42": {"trainingStatus": 4,
                                                                                  "phrase": "PRODUCTIVE",
                                                                                  "nested": {"x": 1}}}}},
-        lactate={"speed_and_heart_rate": {"speed": 3.4, "heartRate": 161},
+        lactate={"speed_and_heart_rate": {"speed": 0.34, "heartRate": 161},
                  "power": {"functionalThresholdPower": 250}},
     )
     assert out["vo2max"] == {"fecha": "2026-10-09", "vo2max": 52.0}
     assert out["prediccion_carrera_s"]["5k"] == 1200
     assert out["estado_entrenamiento"] == {"trainingStatus": 4, "phrase": "PRODUCTIVE"}
     assert out["umbral_lactato"] == {"fc": 161, "ritmo_s_per_km": round(1000 / 3.4, 1), "ftp_w": 250}
+
+
+def test_map_performance_lactate_speed_comes_in_tens_of_m_per_s():
+    # Dato real de Garmin: 0.36666564 corresponde a 3.67 m/s, es decir ~4:33/km.
+    out = mappers.map_performance(None, None, None,
+                                  {"speed_and_heart_rate": {"speed": 0.36666564, "heartRate": 170}})
+    assert out["umbral_lactato"]["ritmo_s_per_km"] == 272.7
 
 
 def test_map_performance_omits_missing_sections():

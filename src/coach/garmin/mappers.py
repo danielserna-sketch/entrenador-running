@@ -81,9 +81,10 @@ def map_performance(max_metrics: list | dict | None, race: dict | None, status: 
     if lactate:
         speed = (lactate.get("speed_and_heart_rate") or {}).get("speed")
         power = lactate.get("power") or {}
+        # Garmin entrega esta velocidad en decenas de m/s (0.3667 = 3.667 m/s = 4:33/km).
         out["umbral_lactato"] = {
             "fc": (lactate.get("speed_and_heart_rate") or {}).get("heartRate"),
-            "ritmo_s_per_km": round(1000 / speed, 1) if speed else None,
+            "ritmo_s_per_km": _speed_to_pace(speed * 10) if speed else None,
             "ftp_w": power.get("functionalThresholdPower"),
         }
     return out
