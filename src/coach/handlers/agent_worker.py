@@ -18,6 +18,9 @@ ERROR_MSG = "Tuve un problema procesando tu mensaje. Inténtalo de nuevo en un m
 
 
 def handler(event, context):
+    if event.get("warmup"):
+        # Ping programado: solo mantiene la Lambda caliente (los imports ya se cargaron).
+        return {"warmup": True}
     wa = WhatsAppClient()
     failures = []
     for record in event.get("Records", []):

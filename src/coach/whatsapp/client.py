@@ -53,11 +53,17 @@ class WhatsAppClient:
             },
         })
 
-    def mark_read(self, message_id: str) -> None:
-        try:
-            self._post({"status": "read", "message_id": message_id})
-        except Exception:  # noqa: BLE001
-            log.info("No se pudo marcar como leído %s", message_id)
+    def mark_read(self, message_id: str, typing: bool = True) -> None:
+        """Marca como leído y muestra "escribiendo…" (se quita al responder o tras ~25 s).
+        Si la API rechaza el indicador, solo marca como leído."""
+        payload = {"status": "read", "message_id": message_id}
+        attempts = [{**payload, "typing_indicator": {"type": "text"}}, payload] if typing else [payload]
+        for body in attempts:
+            try:
+                self._post(body)
+                return
+            except Exception:  # noqa: BLE001
+                log.info("No se pudo marcar como leído %s (indicador=%s)", message_id, "typing_indicator" in body)
 
     def send_smart(self, to: str, text: str, short_summary: str, last_user_ts: float | None) -> str:
         """Texto libre si la ventana de 24 h está abierta; si no, plantilla con un resumen."""

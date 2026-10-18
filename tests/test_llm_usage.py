@@ -26,8 +26,11 @@ def test_turn_logs_token_usage(repo, caplog):
     with caplog.at_level(logging.INFO, logger="coach.agent.coach"):
         assert coach.run("hola") == "Hola"
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("llm_usage"))
-    assert json.loads(line.removeprefix("llm_usage ")) == {"provider": "fake", "tier": "main", "steps": 1,
-                                                           "input": 900, "cache_read": 600, "output": 40}
+    usage = json.loads(line.removeprefix("llm_usage "))
+    assert {k: usage[k] for k in ("provider", "tier", "steps", "input", "cache_read", "output")} == {
+        "provider": "fake", "tier": "main", "steps": 1, "input": 900, "cache_read": 600, "output": 40}
+    assert {"prep_ms", "llm_ms", "tools_ms", "total_ms", "max_tools_per_step"} <= usage.keys()
+    assert usage["total_ms"] >= usage["llm_ms"]
 
 
 def test_openai_reports_cached_tokens():

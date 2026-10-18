@@ -73,3 +73,37 @@ def test_webhook_handler(aws, monkeypatch):
                            "headers": {"x-hub-signature-256": "sha256=bad"}}, None)
     assert bad["statusCode"] == 401
     get_settings.cache_clear()
+
+
+def test_mark_read_sends_typing_indicator_and_falls_back():
+    from coach.whatsapp.client import WhatsAppClient
+
+    sent = []
+
+    class FlakyHttp:
+        def post(self, url, json, headers):
+            sent.append(json)
+
+            class R:
+                status_code = 400 if "typing_indicator" in json else 200
+                text = "bad"
+
+                def json(self):
+                    return {}
+
+                def raise_for_status(self):
+                    raise RuntimeError("400")
+
+            return R()
+
+    wa = WhatsAppClient(creds={"access_token": "t", "phone_number_id": "1"}, http=FlakyHttp())
+    wa.mark_read("wamid.1")
+    assert sent[0]["typing_indicator"] == {"type": "text"} and "typing_indicator" not in sent[1]
+    assert sent[1]["status"] == "read" and len(sent) == 2
+
+
+def test_worker_warmup_does_nothing(monkeypatch):
+    from coach.handlers import agent_worker
+
+    monkeypatch.setattr(agent_worker, "WhatsAppClient", lambda: (_ for _ in ()).throw(AssertionError("no")))
+    assert agent_worker.handler({"warmup": True}, None) == {"warmup": True}
