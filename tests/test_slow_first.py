@@ -47,10 +47,14 @@ def test_easy_ceiling_takes_the_slower_pace(zones):
 
 
 def test_garmin_easy_target_respects_ceiling(zones):
-    w = build_workout(session(1), {**zones, "easy_ceiling_s": 348})
+    w = build_workout(session(1), {**zones, "easy_ceiling_s": 348}, prefer="pace")
     step = w["workoutSegments"][0]["workoutSteps"][0]
     assert step["targetValueTwo"] == round(1000 / 348, 3)  # límite rápido = 5:48/km
     assert step["targetValueOne"] < step["targetValueTwo"]
+    # Por defecto el rodaje va por FC y el techo de ritmo queda en las notas.
+    w = build_workout(session(1), {**zones, "easy_ceiling_s": 348})
+    assert w["workoutSegments"][0]["workoutSteps"][0]["targetType"]["workoutTargetTypeKey"] == "heart.rate.zone"
+    assert "no más rápido que 5:48/km" in w["description"]
 
 
 # ---------------------------------------------------------------------------- validador

@@ -57,11 +57,14 @@ WEEK_SCHEMA = {
                     "title": {"type": "string"},
                     "type": {"type": "string",
                              "enum": ["easy", "long", "intervals", "tempo", "test", "recovery", "technique"]},
-                    "description": {"type": "string"},
+                    "purpose": {"type": "string", "description": "Para qué sirve la sesión, 1-2 frases simples"},
+                    "description": {"type": "string",
+                                    "description": "Cómo hacerla: sensaciones, respiración, RPE. Sin rangos de FC "
+                                                   "ni ritmo (el sistema los agrega desde las zonas)."},
                     "cadence_focus": {"type": "boolean"},
                     "steps": {"type": "array", "items": _STEP},
                 },
-                "required": ["date", "title", "type", "description", "cadence_focus", "steps"],
+                "required": ["date", "title", "type", "purpose", "description", "cadence_focus", "steps"],
                 "additionalProperties": False,
             },
         },
@@ -105,6 +108,9 @@ def build_prompt(ctx: dict) -> str:
             if ctx.get("distance") in rules.MAX_INTERVAL_KM else "")),
         "Usa cadence_focus=true en 1-2 sesiones para trabajar cadencia con metrónomo.",
         "Cada paso con duración (duration_min) o distancia (distance_km) y una zona Friel.",
+        ("Cada sesión lleva 'purpose' (para qué sirve, en palabras simples: p. ej. 'Construir base aeróbica sin "
+         "acumular fatiga') y 'description' (cómo hacerla: sensaciones, respiración, RPE). No escribas rangos de "
+         "FC ni de ritmo: el sistema los pone en las notas y en el reloj a partir de las zonas."),
     ]
     if ctx.get("easy_ceiling_s"):
         lines.append(f"Ritmo de rodaje fácil: nunca más rápido que {_pace(ctx['easy_ceiling_s'])}/km.")
@@ -156,6 +162,7 @@ def fallback_week(ctx: dict, zones: dict | None) -> dict:
     sessions: list[dict] = []
     if ctx.get("needs_test") and picked:
         sessions.append({"date": day(picked.pop(0)), "title": "Test 20 min", "type": "test", "cadence_focus": False,
+                         "purpose": "Medir tu umbral para ajustar las zonas de ritmo del plan.",
                          "description": "Calentamiento suave, 20 min al máximo esfuerzo sostenible y enfriamiento.",
                          "steps": [{"kind": "warmup", "duration_min": 15, "zone": "Z1"},
                                    {"kind": "interval", "duration_min": 20, "zone": "Z4",
@@ -164,6 +171,7 @@ def fallback_week(ctx: dict, zones: dict | None) -> dict:
     if race_day is not None:
         km = rules.DISTANCE_KM.get(ctx["race"]["distance"], 10.0)
         sessions.append({"date": day(race_day), "title": "Carrera", "type": "tempo", "cadence_focus": False,
+                         "purpose": "La carrera objetivo: correr a lo que preparaste.",
                          "description": "Día de carrera.", "steps": [{"kind": "main", "distance_km": km, "zone": "Z4"}]})
     if picked:
         done = sum(validator.session_tss(s, zones) for s in sessions)
@@ -175,9 +183,11 @@ def fallback_week(ctx: dict, zones: dict | None) -> dict:
         each = min(round((minutes - long_min) / len(rest)), cap) if rest else 0
         for d in rest:
             sessions.append({"date": day(d), "title": "Rodaje suave", "type": "easy", "cadence_focus": False,
+                             "purpose": "Sumar base aeróbica sin acumular fatiga.",
                              "description": "Rodaje en Z2: conversando, sin apurarte.",
                              "steps": [{"kind": "main", "duration_min": max(each, 20), "zone": "Z2"}]})
         sessions.append({"date": day(picked[-1]), "title": "Fondo suave", "type": "long", "cadence_focus": False,
+                         "purpose": "Resistencia: acostumbrar el cuerpo a correr más tiempo a ritmo cómodo.",
                          "description": "Fondo en Z2, ritmo cómodo de principio a fin.",
                          "steps": [{"kind": "main", "duration_min": max(long_min, 30), "zone": "Z2"}]})
     return {"summary": "Semana segura de rodajes suaves en Z2 (la propuesta automática no cumplía las reglas).",

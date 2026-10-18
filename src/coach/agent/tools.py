@@ -241,9 +241,15 @@ def recalculate_zones(ctx: ToolContext, args: dict) -> Any:
     change = zones_mod.detect_threshold_change(current, th)
     new = zones_mod.build_zones(th.get("threshold_pace_s"), th.get("threshold_hr"), source="test 20 min",
                                 test_date=test_date)
+    garmin_hr = (current or {}).get("hr_source") == "garmin"
+    if garmin_hr:
+        # La FC manda la que el atleta definió en Garmin; del test solo se toma el ritmo.
+        new.update({k: current[k] for k in ("hr", "threshold_hr", "hr_source", "hr_synced")})
+        if not new.get("pace") and current.get("pace"):
+            new.update({k: current.get(k) for k in ("pace", "threshold_pace_s", "threshold_pace")})
     ctx.repo.save_zones(new)
     pushed = False
-    if new.get("threshold_hr") and args.get("push_to_garmin", True):
+    if not garmin_hr and new.get("threshold_hr") and args.get("push_to_garmin", True):
         try:
             pushed = ctx.garmin.update_running_hr_zones(new["threshold_hr"], new["hr"])  # type: ignore[attr-defined]
         except Exception as e:  # noqa: BLE001
@@ -285,7 +291,7 @@ def modify_session(ctx: ToolContext, args: dict) -> Any:
     if action == "move" and (not args.get("new_date")
                              or periodization.monday_of(date.fromisoformat(args["new_date"])) != monday):
         return {"error": "Para mover indica new_date dentro de la misma semana."}
-    zones = ctx.repo.get_zones()
+    zones = ctx.plan.ensure_zones()
     if session.get("garmin_workout_id"):
         try:
             ctx.garmin.delete_workout(session["garmin_workout_id"])
@@ -315,7 +321,7 @@ def modify_session(ctx: ToolContext, args: dict) -> Any:
 
 
 def create_and_schedule_workout(ctx: ToolContext, args: dict) -> Any:
-    zones = assessment.with_easy_ceiling(ctx.repo.get_zones(), ctx.repo.get_profile(), ctx.repo.get_records())
+    zones = assessment.with_easy_ceiling(ctx.plan.ensure_zones(), ctx.repo.get_profile(), ctx.repo.get_records())
     session = args["session"]
     workout_id = ctx.garmin.create_workout(build_workout(session, zones))
     ctx.garmin.schedule_workout(workout_id, date.fromisoformat(session["date"]))

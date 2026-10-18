@@ -36,6 +36,15 @@ class PlanService:
             self._garmin = self.garmin_factory()
         return self._garmin
 
+    def ensure_zones(self) -> dict | None:
+        """Zonas con la FC que el atleta tiene en Garmin (ver assessment.ensure_zones)."""
+        try:
+            garmin = self.garmin
+        except Exception as e:  # noqa: BLE001
+            log.warning("Sin Garmin para leer zonas: %s", e)
+            garmin = None
+        return assessment.ensure_zones(self.repo, garmin, self.today)
+
     # ---- plan completo ----------------------------------------------------
     def missing_profile_fields(self) -> list[str]:
         profile = self.repo.get_profile()
@@ -46,7 +55,7 @@ class PlanService:
         if missing:
             return {"ok": False, "missing_profile_fields": missing}
         profile = self.repo.get_profile()
-        zones = self.repo.get_zones()
+        zones = self.ensure_zones()
         activities = self.repo.activities(self.today - timedelta(days=90), self.today)
         diag = assessment.assess(profile, activities, zones, self.today, self.repo.get_records())
         level = diag["half_level"] or {}
@@ -95,9 +104,8 @@ class PlanService:
             }
         dailies = self.repo.dailies(self.today - timedelta(days=35), self.today)
         # El test va cuando no hay zonas o están viejas, en la semana 1 o en una de descarga.
-        zones_age = (self.today - date.fromisoformat(zones["updated"])).days if zones and zones.get("updated") else None
-        zones_stale = zones_age is None or zones_age > assessment.ZONES_MAX_AGE_DAYS
-        needs_test = zones_stale and (info["index"] == 1 or info["kind"] == "descarga")
+        needs_test = assessment.needs_threshold_test(zones, self.today) and (
+            info["index"] == 1 or info["kind"] == "descarga")
         level = diag.get("half_level") or {}
         notes = self.repo.notes(self.today - timedelta(days=10))
         adjust = readiness.assess(dailies, notes, self.today)
@@ -125,8 +133,8 @@ class PlanService:
         }
 
     def generate_week(self, monday: date, adjustments: str | None = None, publish: bool = True) -> dict:
+        zones = self.ensure_zones()
         ctx = self.week_context(monday, adjustments)
-        zones = self.repo.get_zones()
         activities = self.repo.activities(monday - timedelta(days=28), self.today)
         old = self.repo.get_week(monday)
         week = microcycle.generate_week(self.llm, self.system, ctx, zones, activities)

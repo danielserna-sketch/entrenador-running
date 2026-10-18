@@ -39,6 +39,17 @@ def hr_zones(threshold_hr: float) -> list[dict]:
     return zones
 
 
+def hr_zones_from_floors(floors: list[int], max_hr: int | None = None) -> list[dict]:
+    """Zonas de FC con los límites que el atleta tiene en Garmin (pisos de Z1 a Z5).
+
+    Garmin maneja 5 zonas: las sub-zonas Z5a-Z5c del método comparten la Z5 de Garmin.
+    """
+    top = max_hr if max_hr and max_hr > floors[4] else floors[4] + 30
+    zones = [{"zone": f"Z{i + 1}", "min_bpm": floors[i], "max_bpm": floors[i + 1] - 1} for i in range(4)]
+    zones += [{"zone": name, "min_bpm": floors[4], "max_bpm": top} for name in ("Z5a", "Z5b", "Z5c")]
+    return zones
+
+
 def pace_zones(threshold_pace_s: float) -> list[dict]:
     """Rangos de pace por zona. `fast_s` es el límite rápido (menos seg/km), `slow_s` el lento."""
     return [
@@ -77,6 +88,8 @@ def easy_pace_ceiling(zones: dict | None, ten_k_s: float | None) -> float | None
 
 
 def zone_for_hr(hr: float, zones: dict) -> str | None:
+    if zones.get("hr") and hr < zones["hr"][0]["min_bpm"]:
+        return "Z1"
     for z in zones.get("hr", []):
         if z["min_bpm"] <= hr <= z["max_bpm"]:
             return z["zone"]

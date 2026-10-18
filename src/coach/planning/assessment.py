@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 
 from coach.agent.athlete_profile import normalize_best_times
@@ -9,7 +10,11 @@ from coach.analytics import history, load, prediction
 from coach.analytics import zones as zones_mod
 from coach.methodology import rules
 
+log = logging.getLogger(__name__)
+
 ZONES_MAX_AGE_DAYS = 56  # SUPUESTO: repetir el test de umbral cada ~8 semanas
+# Zonas de FC que Daniel tiene en Garmin (pisos de Z1 a Z5, oct 2026). Respaldo si Garmin no responde.
+FALLBACK_HR_FLOORS = [111, 145, 151, 162, 170]
 
 
 def best_times(profile: dict, records: dict | None = None) -> tuple[dict[str, int], dict[str, str]]:
@@ -35,6 +40,43 @@ def reference_time(profile: dict, distance: str, records: dict | None = None) ->
         others = ", ".join(sorted({e["key"] for e in efforts}))
         return result["tiempo_s"], f"equivalente desde {others} (Riegel y VDOT)"
     return None, "sin marcas"
+
+
+def needs_threshold_test(zones: dict | None, today: date) -> bool:
+    """El test va si no hay uno reciente: las zonas de Garmin dan la FC, pero el ritmo umbral sale del test."""
+    if not zones or not str(zones.get("source", "")).startswith("test") or not zones.get("updated"):
+        return True
+    return (today - date.fromisoformat(zones["updated"])).days > ZONES_MAX_AGE_DAYS
+
+
+def ensure_zones(repo, garmin, today: date) -> dict | None:
+    """Zonas de FC = las que el atleta tiene en Garmin (se sincronizan una vez al día).
+
+    El ritmo viene solo del test de 20 min: el ritmo umbral que reporta Garmin no es confiable.
+    """
+    zones = repo.get_zones()
+    if zones and zones.get("hr_source") == "garmin" and zones.get("hr_synced") == today.isoformat():
+        return zones
+    data = None
+    try:
+        data = garmin.running_hr_zones()
+    except Exception as e:  # noqa: BLE001
+        log.warning("No se pudieron leer las zonas de FC de Garmin: %s", e)
+    if not data:
+        if zones and zones.get("hr_source") == "garmin":
+            return zones
+        data = {"floors": FALLBACK_HR_FLOORS}
+    floors = data["floors"]
+    new = dict(zones or {"threshold_pace_s": None, "threshold_pace": None, "pace": [], "source": "Garmin",
+                         "updated": today.isoformat()})
+    new.update({
+        "hr": zones_mod.hr_zones_from_floors(floors, data.get("max_hr")),
+        "threshold_hr": data.get("lthr") or floors[4] - 1,
+        "hr_source": "garmin",
+        "hr_synced": today.isoformat(),
+    })
+    repo.save_zones(new)
+    return new
 
 
 def with_easy_ceiling(zones: dict | None, profile: dict, records: dict | None) -> dict | None:
@@ -76,7 +118,7 @@ def assess(profile: dict, activities: list[dict], zones: dict | None, today: dat
     zones_age = None
     if zones and zones.get("updated"):
         zones_age = (today - date.fromisoformat(zones["updated"])).days
-    needs_test = zones is None or zones_age is None or zones_age > ZONES_MAX_AGE_DAYS
+    needs_test = needs_threshold_test(zones, today)
 
     return {
         "distance": distance,

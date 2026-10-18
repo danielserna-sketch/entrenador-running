@@ -27,7 +27,9 @@ def enrich_activity(activity: dict, zones: dict | None) -> dict:
 
 def sync(garmin: GarminProvider, repo: Repo, today: date, days_back: int = 3) -> dict:
     """Trae actividades y bienestar de los últimos días. Devuelve las actividades nuevas."""
-    zones = repo.get_zones()
+    from coach.planning.assessment import ensure_zones
+
+    zones = ensure_zones(repo, garmin, today)
     start = today - timedelta(days=days_back)
     new_activities = []
     for activity in garmin.activities(start, today):
