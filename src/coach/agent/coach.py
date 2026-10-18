@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -24,6 +25,10 @@ COMPACT_AT = 24
 KEEP_RAW = 10
 FIRST_LOAD = 60  # sin ancla todavía: cuántos mensajes recientes se leen (y se resumen) la primera vez
 REFUSAL_TEXT = "No puedo ayudarte con eso. ¿Hablamos de tu entrenamiento?"
+
+
+def _ms(since: float) -> int:
+    return round((time.perf_counter() - since) * 1000)
 
 
 @dataclass
@@ -49,15 +54,20 @@ class Coach:
 
     def run(self, user_text: str, *, history: list[ChatMessage] | None = None, tier: str = "main") -> str:
         """Ejecuta un turno completo: el modelo puede llamar herramientas hasta dar la respuesta final."""
+        started = time.perf_counter()
         system = self._system()
         ctx = self._context(system)
         messages = list(history or []) + [ChatMessage("user", prompts.turn_context(self.now) + user_text)]
         session = self.llm.session(system, messages, [t.spec for t in TOOLS], tier=tier)  # type: ignore[arg-type]
         text = ""
-        usage = {"steps": 0, "input": 0, "cache_read": 0, "output": 0}
+        usage = {"steps": 0, "input": 0, "cache_read": 0, "output": 0,
+                 "prep_ms": _ms(started), "llm_ms": 0, "tools_ms": 0, "max_tools_per_step": 0,
+                 "slowest_tool": None, "slowest_tool_ms": 0}
         try:
             for _ in range(MAX_STEPS):
+                t0 = time.perf_counter()
                 step = session.step()
+                usage["llm_ms"] += _ms(t0)
                 usage["steps"] += 1
                 for key in ("input", "cache_read", "output"):
                     usage[key] += step.usage.get(key) or 0
@@ -67,15 +77,22 @@ class Coach:
                 if not step.tool_calls:
                     break
                 results = []
+                usage["max_tools_per_step"] = max(usage["max_tools_per_step"], len(step.tool_calls))
                 for call in step.tool_calls:
+                    t0 = time.perf_counter()
                     content, is_error = run_tool(ctx, call.name, call.arguments)
-                    log.info("tool %s error=%s", call.name, is_error)
+                    elapsed = _ms(t0)
+                    usage["tools_ms"] += elapsed
+                    if elapsed > usage["slowest_tool_ms"]:
+                        usage["slowest_tool"], usage["slowest_tool_ms"] = call.name, elapsed
+                    log.info("tool %s error=%s ms=%s", call.name, is_error, elapsed)
                     results.append(ToolResult(call.id, content, is_error))
                 session.add_tool_results(results)
             else:
                 text = text or "Me tomó demasiados pasos responder. ¿Puedes concretar un poco la pregunta?"
         finally:
-            # Una línea JSON por turno para medir costo en CloudWatch Logs Insights.
+            # Una línea JSON por turno para medir costo y tiempos en CloudWatch Logs Insights.
+            usage["total_ms"] = _ms(started)
             log.info("llm_usage %s", json.dumps({"provider": getattr(self.llm, "provider", "?"), "tier": tier,
                                                  **usage}))
             garmin = ctx.plan._garmin

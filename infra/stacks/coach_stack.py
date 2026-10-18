@@ -184,6 +184,7 @@ class CoachStack(Stack):
         sync_fn.grant_invoke(sched_role)
         jobs.grant_invoke(sched_role)
         strava_fn.grant_invoke(sched_role)
+        worker.grant_invoke(sched_role)
 
         def schedule(name: str, expr: str, target: lambda_.IFunction, payload: dict) -> None:
             scheduler.CfnSchedule(
@@ -202,6 +203,8 @@ class CoachStack(Stack):
         schedule("EveningAlerts", "cron(0 20 * * ? *)", jobs, {"job": "alerts"})
         # Cada hora: avanza el backfill del historial sin pasar el límite diario de Strava; luego, incremental.
         schedule("StravaSyncHourly", "rate(1 hour)", strava_fn, {})
+        # Cada 5 min: mantiene caliente la Lambda del agente para evitar arranques en frío de 2-4 s.
+        schedule("AgentWarmup", "rate(5 minutes)", worker, {"warmup": True})
 
         # ---- alarmas -----------------------------------------------------------------
         topic = sns.Topic(self, "Alarms")
