@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from coach.analytics import history
+from coach.analytics import zones as zones_mod
 from coach.llm.base import LLMClient, SystemPrompt
 from coach.planning import periodization
 from coach.storage.repo import Repo
@@ -170,6 +171,10 @@ def _profile_lines(profile: dict) -> list[str]:
         lines.append(f"Máximo {profile['max_hours_week']} h/semana")
     if profile.get("longest_session_min"):
         lines.append(f"Sesión más larga posible: {profile['longest_session_min']} min")
+    if profile.get("home_altitude_m"):
+        lines.append(f"Entrena a {profile['home_altitude_m']:.0f} m de altura"
+                     + (f"; carrera a {profile['race_altitude_m']:.0f} m" if profile.get("race_altitude_m") is not None
+                        else ""))
     if "has_power_meter" in profile:
         lines.append("Potenciómetro: " + ("sí" if profile["has_power_meter"] else "no"))
     for key, label in (("injuries", "Lesiones"), ("notes", "Notas")):
@@ -205,12 +210,17 @@ def _plan_lines(repo: Repo, today: date) -> list[str]:
     return lines
 
 
-def _zones_lines(zones: dict | None) -> list[str]:
+def _zones_lines(zones: dict | None, profile: dict, records: dict | None) -> list[str]:
     if not zones:
         return ["Sin zonas: falta el test de 20 minutos"]
-    line = (f"Umbral: ritmo {zones.get('threshold_pace')} min/km, FC {zones.get('threshold_hr')} "
-            f"(actualizadas {zones.get('updated')})")
-    return [line]
+    lines = [(f"Umbral: ritmo {zones.get('threshold_pace')} min/km, FC {zones.get('threshold_hr')} "
+              f"(actualizadas {zones.get('updated')})")]
+    ten_k = (normalize_best_times(profile.get("best_times")).get("10k") or {}).get("tiempo_s") or \
+        (history.best_times_from_records(records).get("10k") or {}).get("time_s")
+    ceiling = zones_mod.easy_pace_ceiling(zones, ten_k)
+    if ceiling:
+        lines.append(f"Rodaje fácil: no más rápido que {_hms(ceiling)}/km")
+    return lines
 
 
 def _note_line(n: dict) -> str:
@@ -255,7 +265,7 @@ def build_ficha(repo: Repo, today: date) -> Ficha:
     records = repo.get_records()
     ficha = Ficha(faltantes=missing_fields(profile, records), conflictos=conflicts(profile, records))
     fixed = [("Perfil", _profile_lines(profile)), ("Marcas", _marks_lines(profile, records)),
-             ("Zonas", _zones_lines(repo.get_zones())), ("Plan", _plan_lines(repo, today))]
+             ("Zonas", _zones_lines(repo.get_zones(), profile, records)), ("Plan", _plan_lines(repo, today))]
     ficha.secciones = list(fixed)
     budget = FICHA_MAX_CHARS - len(ficha.to_prompt())
 

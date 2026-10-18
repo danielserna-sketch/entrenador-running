@@ -91,3 +91,96 @@ def test_garmin_workout_pace_targets(zones):
     assert steps[2]["endCondition"]["conditionTypeKey"] == "distance"
     assert "164 bpm" in w["description"]
     assert w["estimatedDurationInSecs"] > 45 * 60
+
+
+GARMIN_FLOORS = [111, 145, 151, 162, 170]
+
+
+class FakeZonesGarmin:
+    def __init__(self, data=None, fail=False):
+        self.data, self.fail, self.calls = data, fail, 0
+
+    def running_hr_zones(self):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("Garmin caído")
+        return self.data
+
+
+def test_ensure_zones_uses_garmin_hr_zones(repo):
+    garmin = FakeZonesGarmin({"floors": GARMIN_FLOORS, "max_hr": 190, "lthr": None})
+    zones = assessment.ensure_zones(repo, garmin, date(2026, 10, 18))
+    hr = {z["zone"]: (z["min_bpm"], z["max_bpm"]) for z in zones["hr"]}
+    assert hr["Z1"] == (111, 144) and hr["Z2"] == (145, 150) and hr["Z3"] == (151, 161) and hr["Z4"] == (162, 169)
+    assert hr["Z5a"] == hr["Z5c"] == (170, 190)
+    assert zones["threshold_hr"] == 169 and zones["pace"] == []
+    assert assessment.needs_threshold_test(zones, date(2026, 10, 18))  # el ritmo del método sale del test
+    assessment.ensure_zones(repo, garmin, date(2026, 10, 18))
+    assert garmin.calls == 1  # una sincronización al día
+
+
+def test_ensure_zones_falls_back_when_garmin_fails(repo):
+    zones = assessment.ensure_zones(repo, FakeZonesGarmin(fail=True), date(2026, 10, 18))
+    assert [z["min_bpm"] for z in zones["hr"][:5]] == GARMIN_FLOORS
+    assert zones["pace"] == []
+
+
+def test_workout_targets_and_notes_with_garmin_zones(repo):
+    from coach.analytics.zones import pace_zones
+
+    zones = assessment.ensure_zones(repo, FakeZonesGarmin({"floors": GARMIN_FLOORS}), date(2026, 10, 18))
+    zones = {**zones, "pace": pace_zones(300)}  # ritmo de un test
+    session = {"date": "2026-10-20", "title": "3x8 tempo", "type": "tempo",
+               "purpose": "Subir el ritmo que aguantas sin ahogarte.", "description": "Respiración agitada pero controlada.",
+               "steps": [{"kind": "warmup", "duration_min": 15, "zone": "Z1"},
+                         {"kind": "repeat", "times": 3, "steps": [
+                             {"kind": "interval", "duration_min": 8, "zone": "Z3", "note": "RPE 7/10"},
+                             {"kind": "recovery", "duration_min": 3, "zone": "Z1"}]},
+                         {"kind": "cooldown", "duration_min": 10, "zone": "Z1"}]}
+    w = build_workout(session, zones)
+    steps = w["workoutSegments"][0]["workoutSteps"]
+    assert steps[0]["targetType"]["workoutTargetTypeKey"] == "heart.rate.zone"
+    assert (steps[0]["targetValueOne"], steps[0]["targetValueTwo"]) == (111, 144)
+    interval = steps[1]["workoutSteps"][0]
+    assert interval["targetType"]["workoutTargetTypeKey"] == "pace.zone"
+    assert interval["description"].startswith("Z3 · 151-161 ppm · ") and interval["description"].endswith("RPE 7/10")
+    notes = w["description"]
+    assert notes.startswith("Objetivo: Subir el ritmo")
+    assert "Cómo hacerla: Respiración agitada" in notes
+    assert "• Calentamiento 15′ · Z1 · 111-144 ppm" in notes and "• 3 veces:" in notes
+    assert "Intervalo 8′ · Z3 · 151-161 ppm" in notes
+
+
+def test_workout_only_hr_zones_targets_hr_everywhere(repo):
+    zones = assessment.ensure_zones(repo, FakeZonesGarmin({"floors": GARMIN_FLOORS}), date(2026, 10, 18))
+    session = {"date": "2026-10-20", "title": "Series", "type": "intervals", "description": "",
+               "steps": [{"kind": "interval", "duration_min": 3, "zone": "Z5a"}]}
+    w = build_workout(session, zones)
+    step = w["workoutSegments"][0]["workoutSteps"][0]
+    assert step["targetType"]["workoutTargetTypeKey"] == "heart.rate.zone" and step["targetValueOne"] == 170
+    assert "Z5a · más de 169 ppm" in w["description"]
+
+
+def test_workout_without_zones_says_so():
+    w = build_workout({"date": "2026-10-20", "title": "Rodaje", "type": "easy", "description": "Suave",
+                       "steps": [{"kind": "main", "duration_min": 30, "zone": "Z2"}]}, None)
+    assert w["workoutSegments"][0]["workoutSteps"][0]["targetType"]["workoutTargetTypeKey"] == "no.target"
+    assert "Aún no hay zonas" in w["description"]
+
+
+def test_threshold_test_keeps_garmin_hr_zones(repo):
+    from types import SimpleNamespace
+
+    from coach.agent import tools
+
+    assessment.ensure_zones(repo, FakeZonesGarmin({"floors": GARMIN_FLOORS}), date(2026, 10, 18))
+    pushed = []
+    ctx = SimpleNamespace(repo=repo, today=date(2026, 10, 25),
+                          garmin=SimpleNamespace(update_running_hr_zones=lambda *a: pushed.append(a)),
+                          plan=SimpleNamespace(add_changelog=lambda text: None))
+    result = tools.recalculate_zones(ctx, {"test_avg_pace": "4:40", "test_avg_hr": 175})
+    zones = result["zonas"]
+    assert zones["source"] == "test 20 min" and zones["threshold_pace"] == "4:54"
+    assert zones["hr"][1] == {"zone": "Z2", "min_bpm": 145, "max_bpm": 150} and zones["threshold_hr"] == 169
+    assert pushed == []  # no se pisan las zonas de FC del atleta en Garmin
+    assert not assessment.needs_threshold_test(zones, date(2026, 10, 25))

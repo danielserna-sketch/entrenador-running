@@ -90,19 +90,34 @@ class UnofficialGarmin:
             lactate=self._safe(lambda: self.api.get_lactate_threshold(latest=True)),
         )
 
+    def running_hr_zones(self) -> dict | None:
+        """Zonas de FC del perfil Predeterminado de Garmin: las que el atleta definió para su entrenamiento.
+
+        El perfil de carrera puede tener otros límites; manda el Predeterminado.
+        """
+        entry = self._zone_entry("DEFAULT", "RUNNING")
+        floors = [(entry or {}).get(f"zone{i}Floor") for i in range(1, 6)]
+        if not all(floors):
+            return None
+        lthr = entry.get("lactateThresholdHeartRateUsed") if entry.get("trainingMethod") == "LACTATE_THRESHOLD" \
+            else None
+        return {"floors": [int(f) for f in floors], "max_hr": entry.get("maxHeartRateUsed"), "lthr": lthr}
+
+    def _zone_entry(self, *sports: str) -> dict | None:
+        current = self._call(self.api.get_heart_rate_zones_v2) or []
+        entries = current if isinstance(current, list) else current.get("heartRateZones", [])
+        by_sport = {str(z.get("sport", "")).upper(): z for z in entries}
+        return next((by_sport[s] for s in sports if s in by_sport), None)
+
     def update_running_hr_zones(self, threshold_hr: float, hr_zones: list[dict]) -> bool:
         """Carga en Garmin las zonas de FC por umbral láctico.
 
         Garmin maneja 5 zonas: se mapean Z1-Z4 de Friel y Z5a-Z5c se agrupan en la zona 5.
         """
-        current = self._call(self.api.get_heart_rate_zones_v2) or []
-        entries = current if isinstance(current, list) else current.get("heartRateZones", [])
-        running = next((z for z in entries if str(z.get("sport", "")).upper() == "RUNNING"), None)
+        running = self._zone_entry("RUNNING", "DEFAULT")
         if not running:
-            running = next((z for z in entries if str(z.get("sport", "")).upper() == "DEFAULT"), None)
-            if not running:
-                return False
-            running = {**running, "sport": "RUNNING"}
+            return False
+        running = {**running, "sport": "RUNNING"}
         floors = {z["zone"]: z["min_bpm"] for z in hr_zones}
         running.update({
             "trainingMethod": "LACTATE_THRESHOLD",

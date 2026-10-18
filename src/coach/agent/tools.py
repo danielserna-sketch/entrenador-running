@@ -10,12 +10,13 @@ from datetime import date, timedelta
 from typing import Any
 
 from coach.agent import athlete_profile
-from coach.analytics import alerts, compliance, history, load, wellness
+from coach.analytics import alerts, compliance, decoupling, history, load, prediction, wellness
 from coach.analytics import zones as zones_mod
 from coach.garmin.provider import GarminAuthError, GarminProvider
 from coach.garmin.sync import enrich_activity
 from coach.llm.base import ToolSpec
-from coach.planning import periodization
+from coach.methodology import rules
+from coach.planning import assessment, periodization
 from coach.planning.garmin_workout_builder import build_workout
 from coach.planning.microcycle import WEEK_SCHEMA
 from coach.planning.service import PlanService
@@ -71,6 +72,13 @@ def get_activity_detail(ctx: ToolContext, args: dict) -> Any:
         return {"error": "No encontré esa actividad. Usa get_recent_activities para ver los ids."}
     out = _activity_brief(activity)
     out["detail"] = activity.get("detail") or ctx.garmin.activity_detail(args["activity_id"])
+    if activity.get("main_zone") in rules.EASY_ZONES:
+        value = decoupling.aerobic_decoupling(out["detail"].get("splits") or [])
+        if value is not None:
+            out["desacople_aerobico"] = {
+                "valor": value, "bueno": value <= rules.DECOUPLING_OK,
+                "nota": "Compara ritmo/FC de la primera y la segunda mitad. Menos de 5% sugiere buena base "
+                        "aeróbica (convención, no umbral validado; el calor y la hidratación lo suben)."}
     return out
 
 
@@ -125,7 +133,7 @@ def get_compliance(ctx: ToolContext, args: dict) -> Any:
     if not week:
         return {"error": "No hay semana planeada para esa fecha."}
     acts = ctx.repo.activities(monday, monday + timedelta(days=6))
-    results = compliance.match_week(week["sessions"], acts, ctx.today)
+    results = compliance.match_week(week["sessions"], acts, ctx.today, ctx.repo.get_zones())
     return {
         "semana": monday.isoformat(),
         "resumen": compliance.summarize(results),
@@ -133,6 +141,7 @@ def get_compliance(ctx: ToolContext, args: dict) -> Any:
                       "planeado": (r["session"] or {}).get("title"),
                       "realizado": (r["activity"] or {}).get("name"),
                       "color": r["color"], "emoji": compliance.EMOJI.get(r["color"], "⏳"),
+                      "intensidad": r.get("intensity_color"),
                       "ratio": r["ratio"], "metrica": r["metric"]} for r in results],
     }
 
@@ -232,9 +241,15 @@ def recalculate_zones(ctx: ToolContext, args: dict) -> Any:
     change = zones_mod.detect_threshold_change(current, th)
     new = zones_mod.build_zones(th.get("threshold_pace_s"), th.get("threshold_hr"), source="test 20 min",
                                 test_date=test_date)
+    garmin_hr = (current or {}).get("hr_source") == "garmin"
+    if garmin_hr:
+        # La FC manda la que el atleta definió en Garmin; del test solo se toma el ritmo.
+        new.update({k: current[k] for k in ("hr", "threshold_hr", "hr_source", "hr_synced")})
+        if not new.get("pace") and current.get("pace"):
+            new.update({k: current.get(k) for k in ("pace", "threshold_pace_s", "threshold_pace")})
     ctx.repo.save_zones(new)
     pushed = False
-    if new.get("threshold_hr") and args.get("push_to_garmin", True):
+    if not garmin_hr and new.get("threshold_hr") and args.get("push_to_garmin", True):
         try:
             pushed = ctx.garmin.update_running_hr_zones(new["threshold_hr"], new["hr"])  # type: ignore[attr-defined]
         except Exception as e:  # noqa: BLE001
@@ -276,7 +291,7 @@ def modify_session(ctx: ToolContext, args: dict) -> Any:
     if action == "move" and (not args.get("new_date")
                              or periodization.monday_of(date.fromisoformat(args["new_date"])) != monday):
         return {"error": "Para mover indica new_date dentro de la misma semana."}
-    zones = ctx.repo.get_zones()
+    zones = ctx.plan.ensure_zones()
     if session.get("garmin_workout_id"):
         try:
             ctx.garmin.delete_workout(session["garmin_workout_id"])
@@ -294,7 +309,8 @@ def modify_session(ctx: ToolContext, args: dict) -> Any:
         session["duration_min"] = round(validator.estimated_duration_s(session["steps"], zones) / 60)
         week["sessions"].append(session)
     if action in ("move", "replace") and date.fromisoformat(session["date"]) >= ctx.today:
-        workout_id = ctx.garmin.create_workout(build_workout(session, zones))
+        workout_zones = assessment.with_easy_ceiling(zones, ctx.repo.get_profile(), ctx.repo.get_records())
+        workout_id = ctx.garmin.create_workout(build_workout(session, workout_zones))
         ctx.garmin.schedule_workout(workout_id, date.fromisoformat(session["date"]))
         session["garmin_workout_id"] = workout_id
     week["sessions"].sort(key=lambda s: s["date"])
@@ -305,7 +321,7 @@ def modify_session(ctx: ToolContext, args: dict) -> Any:
 
 
 def create_and_schedule_workout(ctx: ToolContext, args: dict) -> Any:
-    zones = ctx.repo.get_zones()
+    zones = assessment.with_easy_ceiling(ctx.plan.ensure_zones(), ctx.repo.get_profile(), ctx.repo.get_records())
     session = args["session"]
     workout_id = ctx.garmin.create_workout(build_workout(session, zones))
     ctx.garmin.schedule_workout(workout_id, date.fromisoformat(session["date"]))
@@ -518,6 +534,28 @@ def search_past_activities(ctx: ToolContext, args: dict) -> Any:
     return out
 
 
+def predict_race(ctx: ToolContext, args: dict) -> Any:
+    """Predicción combinada (Riegel, VDOT, Tanda, Garmin) con rango, confianza y ajuste por altura."""
+    distance = args["distance"]
+    profile = ctx.repo.get_profile()
+    efforts = prediction.collect_efforts(athlete_profile.normalize_best_times(profile.get("best_times")),
+                                         ctx.repo.get_records())
+    since = ctx.today - timedelta(weeks=8)
+    runs = ctx.repo.strava_activities(since, ctx.today) or ctx.repo.activities(since, ctx.today)
+    garmin_s = None
+    try:
+        garmin_s = (ctx.garmin.performance(ctx.today).get("prediccion_carrera_s") or {}) \
+            .get(prediction.GARMIN_KEYS[distance])
+    except GarminAuthError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.info("Sin predicción de Garmin: %s", e)
+    race_alt = args.get("race_altitude_m", profile.get("race_altitude_m"))
+    return prediction.predict(distance, efforts, today=ctx.today,
+                              training=prediction.training_indices(runs, ctx.today), garmin_s=garmin_s,
+                              home_altitude_m=profile.get("home_altitude_m"), race_altitude_m=race_alt)
+
+
 def sync_strava_now(ctx: ToolContext, args: dict) -> Any:
     from coach.strava.client import StravaClient
     from coach.strava.sync import sync
@@ -565,6 +603,8 @@ TOOLS: list[Tool] = [
         "injuries": {"type": "string", "description": "Lesión nueva o cambio (se agrega con fecha, no reemplaza). "
                      "Si no tiene lesiones, 'ninguna'; si se recuperó, dilo."},
         "has_power_meter": {"type": "boolean"},
+        "home_altitude_m": {"type": "number", "description": "Altura donde entrena (m s. n. m.), p. ej. Bogotá 2600"},
+        "race_altitude_m": {"type": "number", "description": "Altura de la carrera objetivo (m s. n. m.)"},
         "notes": {"type": "string", "description": "Dato de contexto (se agrega con fecha, no reemplaza)."},
     })), update_athlete_profile),
     Tool(ToolSpec("log_note", "Registra sensaciones del atleta: RPE (1-10), dolor (0-10) y zona, sueño, estrés o texto.",
@@ -642,6 +682,13 @@ TOOLS: list[Tool] = [
                   "y umbral de lactato. Algunas dependen del reloj; lo que falte aparece en sin_dato.",
                   _obj({"day": {"type": "string", "description": "YYYY-MM-DD (defecto: hoy)"}})),
          get_performance_metrics),
+    Tool(ToolSpec("predict_race",
+                  "Predice el tiempo de una carrera combinando Riegel, VDOT de Daniels, Tanda (entrenamiento) y "
+                  "Garmin, con rango, confianza, ritmo, ajuste por altura y advertencias. Úsala siempre que "
+                  "pregunten en cuánto harían una distancia o si su objetivo es realista.",
+                  _obj({"distance": {"type": "string", "enum": list(prediction.TARGETS)},
+                        "race_altitude_m": {"type": "number", "description": "Altura de la carrera (m), si se sabe"}},
+                       ["distance"])), predict_race),
     Tool(ToolSpec("sync_strava_now", "Sincroniza ya mismo el historial de Strava (actividades nuevas y detalle).",
                   _obj()), sync_strava_now),
     Tool(ToolSpec("sync_garmin_now", "Sincroniza ya mismo las actividades y el bienestar desde Garmin.",

@@ -36,7 +36,7 @@ def post_activity(coach: Coach, activity: dict) -> str:
     week = coach.repo.get_week(monday)
     planned = next((s for s in (week or {}).get("sessions", []) if s["date"] == activity["date"]), None)
     is_test = bool(planned and planned.get("type") == "test")
-    color = compliance.session_compliance(planned, activity, coach.today) if planned else None
+    color = compliance.session_compliance(planned, activity, coach.today, coach.repo.get_zones()) if planned else None
     instruction = (
         f"El atleta acaba de terminar una actividad (id {activity['activity_id']}, {activity.get('name')}). "
         f"Sesión planeada: {planned['title'] if planned else 'ninguna (no planeada)'}. "
