@@ -193,6 +193,16 @@ class Repo:
     def weeks(self) -> list[dict]:
         return self.query_prefix("PLAN#")
 
+    # ---- entrenamientos puntuales (fuera del plan semanal) -----------------
+    def save_adhoc_workout(self, session: dict, workout_id: str) -> None:
+        self.put(f"ADHOC#{session['date']}#{workout_id}", {**session, "garmin_workout_id": workout_id})
+
+    def adhoc_workouts(self, start: date, end: date) -> list[dict]:
+        return self.query_prefix("ADHOC#", start=start.isoformat(), end=end.isoformat())
+
+    def delete_adhoc_workout(self, day: str, workout_id: str) -> None:
+        self.table.delete_item(Key={"PK": self.pk, "SK": f"ADHOC#{day}#{workout_id}"})
+
     # ---- conversación ----------------------------------------------------
     def add_message(self, role: str, text: str) -> None:
         self.put(f"MSG#{datetime.now(UTC).isoformat()}", {"role": role, "text": text}, ttl_days=MSG_TTL_DAYS)

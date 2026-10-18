@@ -11,7 +11,7 @@ from typing import Any
 
 from coach.analytics import alerts, compliance, history, load, wellness
 from coach.analytics import zones as zones_mod
-from coach.garmin.provider import GarminProvider
+from coach.garmin.provider import GarminAuthError, GarminProvider
 from coach.garmin.sync import enrich_activity
 from coach.llm.base import ToolSpec
 from coach.planning import periodization
@@ -270,7 +270,117 @@ def create_and_schedule_workout(ctx: ToolContext, args: dict) -> Any:
     session = args["session"]
     workout_id = ctx.garmin.create_workout(build_workout(session, zones))
     ctx.garmin.schedule_workout(workout_id, date.fromisoformat(session["date"]))
+    ctx.repo.save_adhoc_workout(session, workout_id)  # para que el agente lo vea después
     return {"ok": True, "garmin_workout_id": workout_id}
+
+
+# ---------------------------------------------------------------------------- calendario de Garmin
+def _window(ctx: ToolContext, args: dict) -> tuple[date, date]:
+    start = date.fromisoformat(args["start"]) if args.get("start") else ctx.today
+    end = date.fromisoformat(args["end"]) if args.get("end") else start + timedelta(days=14)
+    if end < start or (end - start).days > 92:
+        raise ValueError("Rango de fechas inválido: máximo 92 días y 'end' después de 'start'.")
+    return start, end
+
+
+def _local_sessions(ctx: ToolContext, start: date, end: date) -> list[dict]:
+    """Sesiones guardadas aquí (plan semanal y puntuales) dentro del rango."""
+    out = []
+    monday = periodization.monday_of(start)
+    while monday <= end:
+        for s in (ctx.repo.get_week(monday) or {}).get("sessions", []):
+            if start <= date.fromisoformat(s["date"]) <= end:
+                out.append({**s, "origen": "plan"})
+        monday += timedelta(weeks=1)
+    out += [{**s, "origen": "puntual"} for s in ctx.repo.adhoc_workouts(start, end)]
+    return out
+
+
+def get_scheduled_workouts(ctx: ToolContext, args: dict) -> Any:
+    """Cruza el calendario de Garmin con lo guardado aquí: dice de dónde sale cada sesión."""
+    start, end = _window(ctx, args)
+    local = _local_sessions(ctx, start, end)
+    aviso = None
+    try:
+        garmin = ctx.garmin.scheduled_workouts(start, end)
+    except GarminAuthError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.warning("No se pudo leer el calendario de Garmin: %s", e)
+        garmin, aviso = [], f"No pude leer el calendario de Garmin ({e}). Solo muestro lo guardado aquí."
+    by_workout = {g["workout_id"]: g for g in garmin if g["workout_id"]}
+    sesiones, en_calendario = [], set()
+    for s in local:
+        wid = s.get("garmin_workout_id")
+        g = by_workout.get(wid)
+        if g:
+            en_calendario.add(wid)
+        sesiones.append({"fecha": s["date"], "titulo": s.get("title"), "origen": s["origen"],
+                         "en_garmin": bool(g), "workout_id": wid, "schedule_id": g and g["schedule_id"]})
+    for g in garmin:
+        if g["workout_id"] not in en_calendario:
+            sesiones.append({"fecha": g["date"], "titulo": g["title"], "origen": "solo_garmin",
+                             "en_garmin": True, "workout_id": g["workout_id"], "schedule_id": g["schedule_id"]})
+    sesiones.sort(key=lambda s: s["fecha"] or "")
+    out = {"desde": start.isoformat(), "hasta": end.isoformat(), "sesiones": sesiones}
+    if aviso:
+        out["aviso"] = aviso
+    return out
+
+
+def change_garmin_schedule(ctx: ToolContext, args: dict) -> Any:
+    """Quita o mueve en el calendario de Garmin un entrenamiento agendado. No borra la plantilla."""
+    action = args["action"]
+    day = date.fromisoformat(args["date"])
+    new_day = date.fromisoformat(args["new_date"]) if args.get("new_date") else None
+    if action == "reschedule" and not new_day:
+        return {"error": "Para mover indica new_date."}
+    if new_day and new_day < ctx.today:
+        return {"error": "No se puede mover a una fecha pasada."}
+    candidates = [g for g in ctx.garmin.scheduled_workouts(day, day) if g["date"] == day.isoformat()
+                  and (not args.get("workout_id") or g["workout_id"] == args["workout_id"])]
+    if not candidates:
+        return {"error": f"No hay entrenamiento agendado en Garmin el {day.isoformat()}."}
+    if len(candidates) > 1:
+        return {"error": "Hay varios entrenamientos ese día; indica workout_id.",
+                "opciones": [{"workout_id": g["workout_id"], "titulo": g["title"]} for g in candidates]}
+    target = candidates[0]
+    owner = next((s for s in _local_sessions(ctx, day, day) if s.get("garmin_workout_id") == target["workout_id"]),
+                 None)
+    if owner and owner["origen"] == "plan" and new_day and \
+            periodization.monday_of(new_day) != periodization.monday_of(day):
+        return {"error": "Esa sesión es del plan: para moverla a otra semana usa modify_session."}
+
+    if action == "unschedule":
+        ctx.garmin.unschedule_workout(target["schedule_id"])
+    elif action == "reschedule":
+        ctx.garmin.reschedule_workout(target["schedule_id"], new_day)
+        if owner and owner["origen"] == "plan":
+            week = ctx.repo.get_week(periodization.monday_of(day))
+            for s in week["sessions"]:
+                if s.get("garmin_workout_id") == target["workout_id"]:
+                    s["date"] = new_day.isoformat()
+            week["sessions"].sort(key=lambda s: s["date"])
+            ctx.repo.save_week(week)
+            ctx.plan.add_changelog(f"Sesión del {day.isoformat()} movida a {new_day.isoformat()} en Garmin.")
+        elif owner:
+            ctx.repo.delete_adhoc_workout(day.isoformat(), target["workout_id"])
+            session = {k: v for k, v in owner.items() if k != "origen"}
+            ctx.repo.save_adhoc_workout({**session, "date": new_day.isoformat()}, target["workout_id"])
+    else:
+        return {"error": "action debe ser 'unschedule' o 'reschedule'."}
+    return {"ok": True, "accion": action, "fecha": day.isoformat(), "nueva_fecha": new_day and new_day.isoformat(),
+            "titulo": target["title"], "del_plan": bool(owner and owner["origen"] == "plan")}
+
+
+def get_performance_metrics(ctx: ToolContext, args: dict) -> Any:
+    """VO2max, predicciones de carrera, estado de entrenamiento y umbral de lactato que calcula Garmin."""
+    day = date.fromisoformat(args["day"]) if args.get("day") else ctx.today
+    data = ctx.garmin.performance(day)
+    secciones = ["vo2max", "prediccion_carrera_s", "estado_entrenamiento", "umbral_lactato"]
+    sin_dato = [k for k in secciones if k not in data]
+    return {"dia": day.isoformat(), **data, "sin_dato": sin_dato or None,
+            "nota": "Los datos que faltan no están en el reloj o Garmin no los calculó: no los estimes."}
 
 
 def send_plan_report(ctx: ToolContext, args: dict) -> Any:
@@ -466,6 +576,26 @@ TOOLS: list[Tool] = [
                         "sort": {"type": "string", "enum": ["date", "pace", "distance"]},
                         "limit": {"type": "integer"}, "include_splits": {"type": "boolean"}})),
          search_past_activities),
+    Tool(ToolSpec("get_scheduled_workouts",
+                  "Entrenamientos agendados (calendario de Garmin + plan + puntuales) entre dos fechas. "
+                  "Úsala antes de decir qué hay programado. Cada sesión indica su origen: plan, puntual o solo_garmin.",
+                  _obj({"start": {"type": "string", "description": "YYYY-MM-DD (defecto: hoy)"},
+                        "end": {"type": "string", "description": "YYYY-MM-DD (defecto: hoy + 14 días)"}})),
+         get_scheduled_workouts),
+    Tool(ToolSpec("change_garmin_schedule",
+                  "Quita o mueve en el calendario de Garmin un entrenamiento ya agendado, sin borrar la plantilla. "
+                  "Solo después de que el atleta lo confirme. Para cambiar el contenido usa modify_session.",
+                  _obj({"date": {"type": "string", "description": "Fecha actual del entrenamiento (YYYY-MM-DD)"},
+                        "action": {"type": "string", "enum": ["unschedule", "reschedule"]},
+                        "new_date": {"type": "string", "description": "Solo para reschedule (YYYY-MM-DD)"},
+                        "workout_id": {"type": "string", "description": "Si hay varios entrenamientos ese día"},
+                        "reason": {"type": "string"}},
+                       ["date", "action"])), change_garmin_schedule),
+    Tool(ToolSpec("get_performance_metrics",
+                  "Métricas que calcula Garmin: VO2max, predicciones de carrera 5k-maratón, estado de entrenamiento "
+                  "y umbral de lactato. Algunas dependen del reloj; lo que falte aparece en sin_dato.",
+                  _obj({"day": {"type": "string", "description": "YYYY-MM-DD (defecto: hoy)"}})),
+         get_performance_metrics),
     Tool(ToolSpec("sync_strava_now", "Sincroniza ya mismo el historial de Strava (actividades nuevas y detalle).",
                   _obj()), sync_strava_now),
     Tool(ToolSpec("sync_garmin_now", "Sincroniza ya mismo las actividades y el bienestar desde Garmin.",

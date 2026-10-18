@@ -71,6 +71,25 @@ class UnofficialGarmin:
     def delete_workout(self, workout_id: str) -> None:
         self._call(self.api.delete_workout, workout_id)
 
+    def unschedule_workout(self, schedule_id: str) -> None:
+        self._call(self.api.unschedule_workout, schedule_id)
+
+    def reschedule_workout(self, schedule_id: str, day: date) -> None:
+        self._call(self.api.reschedule_workout, schedule_id, day.isoformat())
+
+    def scheduled_workouts(self, start: date, end: date) -> list[dict]:
+        raw = self._call(self.api.get_scheduled_workouts_by_period, start.isoformat(), end.isoformat())
+        return [mappers.map_scheduled(w) for w in raw or []]
+
+    def performance(self, day: date) -> dict:
+        d = day.isoformat()
+        return mappers.map_performance(
+            max_metrics=self._safe(self.api.get_max_metrics, d),
+            race=self._safe(self.api.get_race_predictions),
+            status=self._safe(self.api.get_training_status, d),
+            lactate=self._safe(lambda: self.api.get_lactate_threshold(latest=True)),
+        )
+
     def update_running_hr_zones(self, threshold_hr: float, hr_zones: list[dict]) -> bool:
         """Carga en Garmin las zonas de FC por umbral láctico.
 

@@ -31,3 +31,15 @@ class GarminProvider(Protocol):
         """Agenda un workout existente en el calendario de Garmin."""
 
     def delete_workout(self, workout_id: str) -> None: ...
+
+    def scheduled_workouts(self, start: date, end: date) -> list[dict]:
+        """Entrenamientos agendados en el calendario de Garmin entre dos fechas (ver mappers.map_scheduled)."""
+
+    def unschedule_workout(self, schedule_id: str) -> None:
+        """Quita un entrenamiento del calendario sin borrar la plantilla."""
+
+    def reschedule_workout(self, schedule_id: str, day: date) -> None:
+        """Mueve un entrenamiento agendado a otra fecha."""
+
+    def performance(self, day: date) -> dict:
+        """VO2max, predicciones de carrera, estado de entrenamiento y umbral de lactato (None si no hay dato)."""
