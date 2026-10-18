@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from coach.analytics.zones import zone_for_hr, zone_for_pace
 from coach.methodology import rules
 
 GREEN, YELLOW, ORANGE, RED, GRAY = "verde", "amarillo", "naranja", "rojo", "gris"
@@ -20,11 +21,51 @@ def color_for_ratio(ratio: float) -> str:
     return ORANGE
 
 
-def session_compliance(planned: dict | None, actual: dict | None, today: date | None = None) -> dict:
+SEVERITY = [GREEN, YELLOW, ORANGE, RED]
+EASY_SESSION_TYPES = ("easy", "long", "recovery", "technique")
+
+
+def intensity_color(planned: dict, actual: dict, zones: dict | None) -> str | None:
+    """Primero lento: un rodaje suave hecho más rápido de lo planeado no puede salir verde.
+
+    Compara la zona de la FC promedio (o del ritmo, si no hay FC) con la zona principal planeada.
+    Una zona por encima es amarillo; dos o más, naranja. Solo aplica a sesiones suaves, porque en
+    series el promedio mezcla trabajo y recuperación."""
+    if not zones or planned.get("type") not in EASY_SESSION_TYPES:
+        return None
+    target = planned.get("main_zone") or "Z2"
+    zone = None
+    if actual.get("avg_hr") and zones.get("hr"):
+        zone = zone_for_hr(actual["avg_hr"], zones)
+    elif actual.get("avg_pace_s_per_km") and zones.get("pace"):
+        zone = zone_for_pace(actual["avg_pace_s_per_km"], zones)
+    if zone not in rules.ZONE_ORDER or target not in rules.ZONE_ORDER:
+        return None
+    diff = rules.ZONE_ORDER.index(zone) - rules.ZONE_ORDER.index(target)
+    return GREEN if diff <= 0 else YELLOW if diff == 1 else ORANGE
+
+
+def _worse(a: str | None, b: str | None) -> str | None:
+    if a not in SEVERITY or b not in SEVERITY:
+        return a or b
+    return max(a, b, key=SEVERITY.index)
+
+
+def session_compliance(planned: dict | None, actual: dict | None, today: date | None = None,
+                       zones: dict | None = None) -> dict:
     """Compara una sesión planeada con la actividad realizada.
 
-    Métrica en orden de preferencia: TSS, duración, distancia.
+    Volumen: TSS, luego duración, luego distancia. Con zonas, también intensidad: el color final es
+    el peor de los dos.
     """
+    result = _volume_compliance(planned, actual, today)
+    if planned and actual and result["color"] and (color := intensity_color(planned, actual, zones)):
+        result = {**result, "volume_color": result["color"], "intensity_color": color,
+                  "color": _worse(result["color"], color)}
+    return result
+
+
+def _volume_compliance(planned: dict | None, actual: dict | None, today: date | None = None) -> dict:
     today = today or date.today()
     if planned and not actual:
         if date.fromisoformat(planned["date"]) < today:
@@ -45,7 +86,8 @@ def session_compliance(planned: dict | None, actual: dict | None, today: date | 
     return {"color": GREEN, "ratio": None, "metric": None}
 
 
-def match_week(planned_sessions: list[dict], activities: list[dict], today: date | None = None) -> list[dict]:
+def match_week(planned_sessions: list[dict], activities: list[dict], today: date | None = None,
+               zones: dict | None = None) -> list[dict]:
     """Empareja sesiones planeadas con actividades de carrera del mismo día."""
     by_day: dict[str, list[dict]] = {}
     for a in activities:
@@ -55,7 +97,7 @@ def match_week(planned_sessions: list[dict], activities: list[dict], today: date
     for s in planned_sessions:
         acts = by_day.get(s["date"], [])
         actual = acts.pop(0) if acts else None
-        results.append({"session": s, "activity": actual, **session_compliance(s, actual, today)})
+        results.append({"session": s, "activity": actual, **session_compliance(s, actual, today, zones)})
     for leftovers in by_day.values():
         for a in leftovers:
             results.append({"session": None, "activity": a, **session_compliance(None, a, today)})

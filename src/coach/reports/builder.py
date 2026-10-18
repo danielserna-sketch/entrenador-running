@@ -60,7 +60,7 @@ def build_context(repo: Repo, today: date, reason: str) -> tuple[dict, dict[str,
         sessions_view = []
         if detail:
             week_acts = [a for a in activities if monday <= date.fromisoformat(a["date"]) < monday + timedelta(days=7)]
-            for r in compliance.match_week(detail["sessions"], week_acts, today):
+            for r in compliance.match_week(detail["sessions"], week_acts, today, zones):
                 s, a = r["session"], r["activity"]
                 ref = s or a
                 d = date.fromisoformat(ref["date"])
