@@ -1,7 +1,7 @@
 """Proveedor Anthropic (Claude) usando el SDK oficial `anthropic`.
 
 - Caché de prompt: herramientas + system estático (persona y metodología) quedan en el prefijo
-  cacheado; el system dinámico (fecha, perfil) va después del punto de caché.
+  cacheado; el system dinámico (ficha del atleta y resúmenes) tiene un segundo punto de caché.
 - Fallback del lado del servidor ante rechazos (`fallbacks: "default"`) para Sonnet/Opus.
 - Los bloques de la respuesta se agregan tal cual al historial del turno para conservar
   el razonamiento entre llamadas a herramientas.
@@ -34,7 +34,8 @@ class AnthropicLLM:
     def _system_blocks(self, system: SystemPrompt) -> list[dict]:
         blocks = [{"type": "text", "text": system.static, "cache_control": {"type": "ephemeral"}}]
         if system.dynamic:
-            blocks.append({"type": "text", "text": system.dynamic})
+            # Segundo punto de caché: la ficha del atleta cambia poco entre turnos.
+            blocks.append({"type": "text", "text": system.dynamic, "cache_control": {"type": "ephemeral"}})
         return blocks
 
     def _create(self, tier: Tier, **kwargs):

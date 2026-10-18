@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
+from coach.agent import athlete_profile
 from coach.agent.coach import Coach
 from coach.analytics import compliance
 from coach.config import get_settings
@@ -60,6 +61,11 @@ def morning_brief(coach: Coach) -> str:
 
 
 def weekly_review(coach: Coach) -> str:
+    # Primero el resumen del atleta (modelo rápido, una vez por semana), para que la revisión ya lo use.
+    try:
+        athlete_profile.refresh_athlete_summary(coach.repo, coach.llm, coach.today)
+    except Exception:
+        log.exception("No se pudo actualizar el resumen del atleta")
     next_monday = periodization.monday_of(coach.today) + timedelta(days=7)
     return run_task(coach, (
         "Es la revisión semanal del domingo. 1) Revisa get_compliance de esta semana, get_training_load y "

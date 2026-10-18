@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from coach.agent.athlete_profile import normalize_best_times
 from coach.analytics import history, load
 from coach.methodology import rules
 
@@ -12,7 +13,7 @@ ZONES_MAX_AGE_DAYS = 56  # SUPUESTO: repetir el test de umbral cada ~8 semanas
 
 def best_times(profile: dict, records: dict | None = None) -> tuple[dict[str, int], dict[str, str]]:
     """Marcas del perfil y, para las distancias que falten, las de Strava. Devuelve (marcas, origen)."""
-    best = {k: int(v) for k, v in (profile.get("best_times") or {}).items() if v}
+    best = {k: int(v["tiempo_s"]) for k, v in normalize_best_times(profile.get("best_times")).items()}
     source = {k: "marca real" for k in best}
     for key, r in history.best_times_from_records(records).items():
         if key not in best:

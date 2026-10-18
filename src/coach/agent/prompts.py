@@ -1,9 +1,9 @@
-"""Prompts del entrenador. La parte estática se cachea; la dinámica lleva fecha, perfil y estado."""
+"""Prompts del entrenador. La parte estática se cachea; la dinámica lleva lo que se sabe del atleta
+(ficha y resúmenes), que cambia poco. La fecha y la hora van en cada mensaje (ver `turn_context`)."""
 
 from __future__ import annotations
 
-import json
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 
 from coach.llm.base import SystemPrompt
@@ -33,9 +33,14 @@ Cómo trabajas:
   carga, plan y cumplimiento antes de opinar. Nunca inventes números.
 - Las métricas (TSS, IF, zonas, ACWR, colores de cumplimiento) las calculan las herramientas;
   tú las interpretas y explicas el porqué.
-- Si falta información del perfil para planificar (distancia objetivo, fecha de carrera, días
-  disponibles, mejores marcas, lesiones), pregúntala de forma conversacional, de a 2-3 cosas por
-  mensaje, y guárdala con update_athlete_profile.
+- Lo que ya sabes del atleta está abajo: la FICHA DEL ATLETA, el RESUMEN DEL ATLETA y el RESUMEN DE
+  LA CONVERSACIÓN. Revísalos antes de preguntar y nunca preguntes un dato que ya esté ahí.
+  Pregunta solo lo que aparece en "Falta saber", de forma conversacional y de a 2-3 cosas por mensaje,
+  y guárdalo con update_athlete_profile. Lo que aparece en "Por confirmar una vez" confírmalo una sola
+  vez y vuelve a guardarlo. Si la ficha dice que hay más hechos guardados, consulta get_profile antes
+  de preguntar.
+- Cada mensaje del atleta empieza con [Contexto del sistema: ...] con la fecha y la hora local. Úsalo,
+  pero no lo menciones.
 - Las mejores marcas y el historial salen de Strava (get_personal_records, get_training_history,
   search_past_activities). En el onboarding, antes de preguntar marcas, consulta get_personal_records
   y propónselas al atleta ("en Strava veo 10K en 48:12 de marzo, ¿la tomamos como referencia?");
@@ -44,7 +49,9 @@ Cómo trabajas:
   historial y los récords.
 - Cuando el atleta te cuente cómo se sintió (RPE, dolor, sueño, estrés), regístralo con log_note.
 - Guarda con save_memory los datos duraderos que debas recordar (preferencias, lesiones pasadas,
-  contexto de vida que afecta el entrenamiento).
+  contexto de vida que afecta el entrenamiento). Si el atleta corrige un dato guardado, actualízalo
+  (update_athlete_profile, o update_memory con el id del hecho). Antes de borrar un hecho con
+  forget_memory, pide confirmación al atleta.
 - No menciones métricas que no aparezcan en los datos de las herramientas. Si un dato falta, no lo
   digas salvo que el atleta lo pregunte.
 - Antes de cambios grandes (crear o regenerar el plan, mover varias sesiones) resume lo que harás
@@ -71,22 +78,25 @@ def static_prompt() -> str:
     return PERSONA + "\n\n" + METHODOLOGY
 
 
-def dynamic_prompt(today: date, now: datetime, profile: dict, memory: dict, zones: dict | None,
-                   current_week: dict | None) -> str:
-    state = {
-        "hoy": today.isoformat(),
-        "hora_local": now.strftime("%H:%M"),
-        "dia_semana": ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][today.weekday()],
-        "perfil": profile or "vacío: hay que hacer el onboarding",
-        "memoria": memory,
-        "zonas": {"umbral_pace": zones.get("threshold_pace"), "umbral_fc": zones.get("threshold_hr"),
-                  "actualizadas": zones.get("updated")} if zones else "sin zonas: falta test de 20 min",
-        "semana_actual": current_week,
-    }
-    return "Estado actual del atleta (datos del sistema):\n" + json.dumps(state, ensure_ascii=False, default=str)
+DAYS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 
 
-def build_system(today: date, now: datetime, profile: dict, memory: dict, zones: dict | None,
-                 current_week: dict | None) -> SystemPrompt:
+def turn_context(now: datetime) -> str:
+    """Fecha y hora van al inicio del mensaje, no en el system: así el system no cambia cada minuto y la
+    caché del proveedor cubre la ficha y el historial entre turnos."""
+    return f"[Contexto del sistema: hoy {DAYS[now.weekday()]} {now.date().isoformat()}, hora local {now:%H:%M}]\n"
+
+
+def dynamic_prompt(ficha: str, athlete_summary: str = "", conversation_summary: str = "") -> str:
+    parts = []
+    if athlete_summary:
+        parts.append(f"RESUMEN DEL ATLETA (se actualiza cada semana)\n{athlete_summary}")
+    parts.append(ficha)
+    if conversation_summary:
+        parts.append(f"RESUMEN DE LA CONVERSACIÓN (mensajes anteriores a los que ves)\n{conversation_summary}")
+    return "\n\n".join(parts)
+
+
+def build_system(ficha: str, athlete_summary: str = "", conversation_summary: str = "") -> SystemPrompt:
     return SystemPrompt(static=static_prompt(),
-                        dynamic=dynamic_prompt(today, now, profile, memory, zones, current_week))
+                        dynamic=dynamic_prompt(ficha, athlete_summary, conversation_summary))
