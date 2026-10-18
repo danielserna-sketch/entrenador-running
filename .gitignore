@@ -6,4 +6,9 @@ __pycache__/
 cdk.out/
 *.tokens.json
 garmin_tokens*.json
+tokens.json
 .env
+strava*.json
+
+# Exportaciones personales (Strava, GPS)
+Contexto/

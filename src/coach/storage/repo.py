@@ -11,6 +11,8 @@ Esquema: PK = "USER#<id>", SK por tipo de entidad:
   ALERT#<tipo>#<yyyy-mm-dd>
   REPORT#<n>
   DEDUP#<whatsapp message id> (con TTL)
+  STRAVA_ACTIVITY#<yyyy-mm-dd>#<strava id>  (historial de Strava, aparte de ACTIVITY# de Garmin)
+  META#strava_sync, META#strava_records
 """
 
 from __future__ import annotations
@@ -146,6 +148,35 @@ class Repo:
     def notes(self, since: date) -> list[dict]:
         return self.query_prefix("NOTE#", start=since.isoformat())
 
+    # ---- Strava (historial) ----------------------------------------------
+    def save_strava_activity(self, activity: dict) -> bool:
+        """Guarda o actualiza una actividad de Strava sin perder el detalle ya traído. True si es nueva."""
+        sk = f"STRAVA_ACTIVITY#{activity['date']}#{activity['activity_id']}"
+        current = self.get(sk)
+        if current and current.get("detailed") and not activity.get("detailed"):
+            activity = {**current, **{k: v for k, v in activity.items() if v is not None}}
+        self.put(sk, activity)
+        return current is None
+
+    def strava_activities(self, start: date | None = None, end: date | None = None) -> list[dict]:
+        return self.query_prefix("STRAVA_ACTIVITY#", start=start.isoformat() if start else None,
+                                 end=end.isoformat() if end else None)
+
+    def get_strava_activity(self, day: str, activity_id: str) -> dict | None:
+        return self.get(f"STRAVA_ACTIVITY#{day}#{activity_id}")
+
+    def get_strava_sync(self) -> dict:
+        return self.get("META#strava_sync") or {"listed_until": 0, "pending": [], "backfill_done": False}
+
+    def save_strava_sync(self, state: dict) -> None:
+        self.put("META#strava_sync", state)
+
+    def get_records(self) -> dict | None:
+        return self.get("META#strava_records")
+
+    def save_records(self, records: dict) -> None:
+        self.put("META#strava_records", records)
+
     # ---- plan -------------------------------------------------------------
     def get_macro(self) -> dict | None:
         return self.get("MACRO")
@@ -161,6 +192,16 @@ class Repo:
 
     def weeks(self) -> list[dict]:
         return self.query_prefix("PLAN#")
+
+    # ---- entrenamientos puntuales (fuera del plan semanal) -----------------
+    def save_adhoc_workout(self, session: dict, workout_id: str) -> None:
+        self.put(f"ADHOC#{session['date']}#{workout_id}", {**session, "garmin_workout_id": workout_id})
+
+    def adhoc_workouts(self, start: date, end: date) -> list[dict]:
+        return self.query_prefix("ADHOC#", start=start.isoformat(), end=end.isoformat())
+
+    def delete_adhoc_workout(self, day: str, workout_id: str) -> None:
+        self.table.delete_item(Key={"PK": self.pk, "SK": f"ADHOC#{day}#{workout_id}"})
 
     # ---- conversación ----------------------------------------------------
     def add_message(self, role: str, text: str) -> None:

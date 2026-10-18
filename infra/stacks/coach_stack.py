@@ -110,6 +110,8 @@ class CoachStack(Stack):
         whatsapp_secret = placeholder("coach/whatsapp", ["access_token", "app_secret", "verify_token",
                                                           "phone_number_id"])
         llm_secret = placeholder("coach/llm", ["anthropic_api_key", "openai_api_key"])
+        strava_secret = placeholder("coach/strava", ["client_id", "client_secret", "refresh_token",
+                                                     "access_token", "expires_at"])
 
         # ---- cola ---------------------------------------------------------------
         dlq = sqs.Queue(self, "IncomingDLQ", fifo=True, retention_period=Duration.days(14))
@@ -126,6 +128,7 @@ class CoachStack(Stack):
             "SECRET_GARMIN_TOKENS": garmin_secret.secret_name,
             "SECRET_WHATSAPP": whatsapp_secret.secret_name,
             "SECRET_LLM": llm_secret.secret_name,
+            "SECRET_STRAVA": strava_secret.secret_name,
             "ALLOWED_PHONE": cfg["allowed_phone"],
             "COACH_TIMEZONE": tz,
             "LLM_PROVIDER": cfg.get("llm_provider", "anthropic"),
@@ -152,15 +155,17 @@ class CoachStack(Stack):
             )
             table.grant_read_write_data(f)
             bucket.grant_read_write(f)
-            for secret in (garmin_secret, whatsapp_secret, llm_secret):
+            for secret in (garmin_secret, whatsapp_secret, llm_secret, strava_secret):
                 secret.grant_read(f)
             garmin_secret.grant_write(f)  # el refresh token de Garmin rota
+            strava_secret.grant_write(f)  # el access token de Strava se renueva cada 6 h
             return f
 
         webhook = fn("Webhook", "coach.handlers.webhook.handler", 10, 512)
         worker = fn("AgentWorker", "coach.handlers.agent_worker.handler", 900)
         sync_fn = fn("GarminSync", "coach.handlers.garmin_sync.handler", 600)
         jobs = fn("ProactiveJobs", "coach.handlers.proactive_jobs.handler", 900)
+        strava_fn = fn("StravaSync", "coach.handlers.strava_sync.handler", 600)
 
         queue.grant_send_messages(webhook)
         worker.add_event_source(sources.SqsEventSource(queue, batch_size=1, report_batch_item_failures=True))
@@ -178,6 +183,7 @@ class CoachStack(Stack):
         sched_role = iam.Role(self, "SchedulerRole", assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"))
         sync_fn.grant_invoke(sched_role)
         jobs.grant_invoke(sched_role)
+        strava_fn.grant_invoke(sched_role)
 
         def schedule(name: str, expr: str, target: lambda_.IFunction, payload: dict) -> None:
             scheduler.CfnSchedule(
@@ -194,12 +200,14 @@ class CoachStack(Stack):
         schedule("MorningBrief", cfg.get("morning_cron", "cron(15 6 * * ? *)"), jobs, {"job": "morning_brief"})
         schedule("WeeklyReview", cfg.get("weekly_cron", "cron(0 18 ? * SUN *)"), jobs, {"job": "weekly_review"})
         schedule("EveningAlerts", "cron(0 20 * * ? *)", jobs, {"job": "alerts"})
+        # Cada hora: avanza el backfill del historial sin pasar el límite diario de Strava; luego, incremental.
+        schedule("StravaSyncHourly", "rate(1 hour)", strava_fn, {})
 
         # ---- alarmas -----------------------------------------------------------------
         topic = sns.Topic(self, "Alarms")
         topic.add_subscription(subs.EmailSubscription(cfg["report_email"]))
         action = cw_actions.SnsAction(topic)
-        for f in (webhook, worker, sync_fn, jobs):
+        for f in (webhook, worker, sync_fn, jobs, strava_fn):
             f.metric_errors(period=Duration.hours(1)).create_alarm(
                 self, f"{f.node.id}Errors", threshold=3, evaluation_periods=1,
                 treat_missing_data=cw.TreatMissingData.NOT_BREACHING).add_alarm_action(action)

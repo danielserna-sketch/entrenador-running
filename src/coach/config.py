@@ -32,6 +32,7 @@ class Settings:
     secret_garmin_tokens: str = "coach/garmin-tokens"
     secret_whatsapp: str = "coach/whatsapp"  # {"access_token","app_secret","verify_token","phone_number_id"}
     secret_llm: str = "coach/llm"  # {"anthropic_api_key","openai_api_key"}
+    secret_strava: str = "coach/strava"  # {"client_id","client_secret","refresh_token","access_token","expires_at"}
 
     # WhatsApp
     allowed_phone: str = ""  # número del atleta en formato E.164 sin '+', ej. 573001234567
@@ -71,6 +72,7 @@ def get_settings() -> Settings:
         secret_garmin_tokens=_env("SECRET_GARMIN_TOKENS", "coach/garmin-tokens"),
         secret_whatsapp=_env("SECRET_WHATSAPP", "coach/whatsapp"),
         secret_llm=_env("SECRET_LLM", "coach/llm"),
+        secret_strava=_env("SECRET_STRAVA", "coach/strava"),
         allowed_phone=_env("ALLOWED_PHONE", ""),
         graph_api_version=_env("GRAPH_API_VERSION", "v21.0"),
         template_name=_env("WHATSAPP_TEMPLATE", "coach_update"),

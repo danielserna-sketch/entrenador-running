@@ -46,6 +46,49 @@ def map_activity(raw: dict) -> dict:
     }
 
 
+def map_scheduled(raw: dict) -> dict:
+    """Entrenamiento agendado (workoutScheduleByPeriod). Forma confirmada con una cuenta real."""
+    workout = raw.get("workout") or {}
+    return {
+        "schedule_id": str(raw.get("workoutScheduleId") or ""),
+        "workout_id": str(workout.get("workoutId") or ""),
+        "date": (raw.get("calendarDate") or "")[:10],
+        "title": workout.get("workoutName"),
+    }
+
+
+def _first(value: list | dict | None) -> dict | None:
+    if isinstance(value, list):
+        return value[0] if value and isinstance(value[0], dict) else None
+    return value if isinstance(value, dict) else None
+
+
+def map_performance(max_metrics: list | dict | None, race: dict | None, status: dict | None,
+                    lactate: dict | None) -> dict:
+    """Métricas de rendimiento de Garmin ya resumidas. Cada sección es None si no hay dato."""
+    generic = (_first(max_metrics) or {}).get("generic") or {}
+    out = {}
+    if generic.get("vo2MaxValue"):
+        out["vo2max"] = {"fecha": generic.get("calendarDate"), "vo2max": generic["vo2MaxValue"]}
+    if race:
+        out["prediccion_carrera_s"] = {"5k": race.get("time5K"), "10k": race.get("time10K"),
+                                       "media": race.get("timeHalfMarathon"), "maraton": race.get("timeMarathon")}
+    device = next(iter((status or {}).get("mostRecentTrainingStatus", {})
+                       .get("latestTrainingStatusData", {}).values()), None)
+    if device:
+        out["estado_entrenamiento"] = {k: v for k, v in device.items()
+                                       if isinstance(v, (int, float, str)) and v is not None}
+    if lactate:
+        speed = (lactate.get("speed_and_heart_rate") or {}).get("speed")
+        power = lactate.get("power") or {}
+        out["umbral_lactato"] = {
+            "fc": (lactate.get("speed_and_heart_rate") or {}).get("heartRate"),
+            "ritmo_s_per_km": round(1000 / speed, 1) if speed else None,
+            "ftp_w": power.get("functionalThresholdPower"),
+        }
+    return out
+
+
 def map_splits(raw: dict | list | None) -> list[dict]:
     laps = (raw or {}).get("lapDTOs", []) if isinstance(raw, dict) else (raw or [])
     out = []
