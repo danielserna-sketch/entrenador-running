@@ -29,6 +29,8 @@ STEP_TYPES = {
     "repeat": (6, "repeat"),
     "main": (8, "main"),
 }
+# Todo entrenamiento que el agente crea en Garmin lleva este prefijo, para distinguirlo en el reloj.
+WORKOUT_PREFIX = "Agents - "
 RUNNING = {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1}
 
 
@@ -126,7 +128,7 @@ def build_workout(session: dict, zones: dict | None, prefer: str = "pace") -> di
         description += (f"\nCadencia objetivo: {cadence['target_rpm']} rpm. Metrónomo a "
                         f"{cadence['metronome_bpm']} bpm, alerta cada 2 ciclos, solo vibración.")
     return {
-        "workoutName": f"CC · {session['title']}"[:80],
+        "workoutName": f"{WORKOUT_PREFIX}{session['title']}"[:80],
         "description": description.strip()[:1000],
         "sportType": RUNNING,
         "estimatedDurationInSecs": estimated_duration_s(session["steps"], zones),
