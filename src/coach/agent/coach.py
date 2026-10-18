@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -54,9 +55,13 @@ class Coach:
         messages = list(history or []) + [ChatMessage("user", user_text)]
         session = self.llm.session(system, messages, [t.spec for t in TOOLS], tier=tier)  # type: ignore[arg-type]
         text = ""
+        usage = {"steps": 0, "input": 0, "cache_read": 0, "output": 0}
         try:
             for _ in range(MAX_STEPS):
                 step = session.step()
+                usage["steps"] += 1
+                for key in ("input", "cache_read", "output"):
+                    usage[key] += step.usage.get(key) or 0
                 if step.stop_reason == "refusal":
                     return REFUSAL_TEXT
                 text = step.text or text
@@ -71,6 +76,9 @@ class Coach:
             else:
                 text = text or "Me tomó demasiados pasos responder. ¿Puedes concretar un poco la pregunta?"
         finally:
+            # Una línea JSON por turno para medir costo en CloudWatch Logs Insights.
+            log.info("llm_usage %s", json.dumps({"provider": getattr(self.llm, "provider", "?"), "tier": tier,
+                                                 **usage}))
             garmin = ctx.plan._garmin
             if garmin is not None and hasattr(garmin, "close"):
                 garmin.close()
