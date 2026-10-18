@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from coach.agent.athlete_profile import normalize_best_times
-from coach.analytics import history, load
+from coach.analytics import history, load, prediction
 from coach.analytics import zones as zones_mod
 from coach.methodology import rules
 
@@ -28,10 +28,12 @@ def reference_time(profile: dict, distance: str, records: dict | None = None) ->
     best, source = best_times(profile, records)
     if best.get(distance):
         return best[distance], source[distance]
-    for other, t in best.items():
-        if t and other in rules.DISTANCE_KM:
-            eq = rules.riegel(t, rules.DISTANCE_KM[other], rules.DISTANCE_KM[distance])
-            return int(eq), f"equivalente desde {other} (Riegel, {source[other]})"
+    # Sin marca directa: predicción combinada (Riegel + VDOT) desde todas las marcas disponibles.
+    efforts = prediction.collect_efforts(normalize_best_times(profile.get("best_times")), records)
+    result = prediction.predict(distance, efforts)
+    if result.get("tiempo_s"):
+        others = ", ".join(sorted({e["key"] for e in efforts}))
+        return result["tiempo_s"], f"equivalente desde {others} (Riegel y VDOT)"
     return None, "sin marcas"
 
 

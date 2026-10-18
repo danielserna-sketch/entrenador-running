@@ -171,6 +171,10 @@ def _profile_lines(profile: dict) -> list[str]:
         lines.append(f"Máximo {profile['max_hours_week']} h/semana")
     if profile.get("longest_session_min"):
         lines.append(f"Sesión más larga posible: {profile['longest_session_min']} min")
+    if profile.get("home_altitude_m"):
+        lines.append(f"Entrena a {profile['home_altitude_m']:.0f} m de altura"
+                     + (f"; carrera a {profile['race_altitude_m']:.0f} m" if profile.get("race_altitude_m") is not None
+                        else ""))
     if "has_power_meter" in profile:
         lines.append("Potenciómetro: " + ("sí" if profile["has_power_meter"] else "no"))
     for key, label in (("injuries", "Lesiones"), ("notes", "Notas")):
