@@ -120,7 +120,8 @@ def test_onboarding_plan_and_report(repo, monkeypatch):
 
     # Primera semana publicada en Garmin, con test de 20 min (no hay zonas todavía).
     assert len(garmin.created) == 3 and garmin.scheduled[0][1] == "2026-10-20"
-    assert garmin.created[0]["workoutName"].startswith("CC · Test")
+    assert all(w["workoutName"].startswith("Agents - ") for w in garmin.created)
+    assert garmin.created[0]["workoutName"].startswith("Agents - Test")
     assert repo.get_week(date(2026, 10, 19))["sessions"][0]["type"] == "test"
 
     # Reporte en S3 y mensajes en historial.
