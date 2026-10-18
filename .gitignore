@@ -7,3 +7,4 @@ cdk.out/
 *.tokens.json
 garmin_tokens*.json
 .env
+strava*.json

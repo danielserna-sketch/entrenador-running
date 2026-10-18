@@ -47,7 +47,7 @@ class PlanService:
         profile = self.repo.get_profile()
         zones = self.repo.get_zones()
         activities = self.repo.activities(self.today - timedelta(days=90), self.today)
-        diag = assessment.assess(profile, activities, zones, self.today)
+        diag = assessment.assess(profile, activities, zones, self.today, self.repo.get_records())
         level = diag["half_level"] or {}
         macro = periodization.build_macrocycle(
             race_date=date.fromisoformat(profile["race_date"]),

@@ -4,27 +4,39 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from coach.analytics import load
+from coach.analytics import history, load
 from coach.methodology import rules
 
 ZONES_MAX_AGE_DAYS = 56  # SUPUESTO: repetir el test de umbral cada ~8 semanas
 
 
-def reference_time(profile: dict, distance: str) -> tuple[int | None, str]:
+def best_times(profile: dict, records: dict | None = None) -> tuple[dict[str, int], dict[str, str]]:
+    """Marcas del perfil y, para las distancias que falten, las de Strava. Devuelve (marcas, origen)."""
+    best = {k: int(v) for k, v in (profile.get("best_times") or {}).items() if v}
+    source = {k: "marca real" for k in best}
+    for key, r in history.best_times_from_records(records).items():
+        if key not in best:
+            best[key] = int(r["time_s"])
+            source[key] = f"marca Strava ({r['date']})"
+    return best, source
+
+
+def reference_time(profile: dict, distance: str, records: dict | None = None) -> tuple[int | None, str]:
     """Mejor marca para la distancia objetivo, o su equivalente desde otra distancia."""
-    best = profile.get("best_times") or {}
+    best, source = best_times(profile, records)
     if best.get(distance):
-        return int(best[distance]), "marca real"
+        return best[distance], source[distance]
     for other, t in best.items():
         if t and other in rules.DISTANCE_KM:
             eq = rules.riegel(t, rules.DISTANCE_KM[other], rules.DISTANCE_KM[distance])
-            return int(eq), f"equivalente desde {other} (Riegel)"
+            return int(eq), f"equivalente desde {other} (Riegel, {source[other]})"
     return None, "sin marcas"
 
 
-def assess(profile: dict, activities: list[dict], zones: dict | None, today: date) -> dict:
+def assess(profile: dict, activities: list[dict], zones: dict | None, today: date,
+           records: dict | None = None) -> dict:
     distance = profile.get("goal_distance", "half")
-    ref_time, ref_source = reference_time(profile, distance)
+    ref_time, ref_source = reference_time(profile, distance, records)
     days_available = profile.get("days_available") or []
 
     if ref_time:
@@ -37,7 +49,7 @@ def assess(profile: dict, activities: list[dict], zones: dict | None, today: dat
 
     level = None
     if distance == "half":
-        best = profile.get("best_times") or {}
+        best, _ = best_times(profile, records)
         lv = rules.half_level(best.get("10k"), best.get("half"))
         if lv:
             level = {"name": lv.name, "category": lv.category, "sessions": lv.sessions,
