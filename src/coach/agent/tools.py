@@ -76,8 +76,10 @@ def get_activity_detail(ctx: ToolContext, args: dict) -> Any:
 def get_wellness(ctx: ToolContext, args: dict) -> Any:
     days = int(args.get("days", 7))
     dailies = ctx.repo.dailies(ctx.today - timedelta(days=35), ctx.today)
-    return {"snapshot": wellness.wellness_snapshot(dailies, ctx.today),
-            "days": [d for d in dailies if date.fromisoformat(d["date"]) > ctx.today - timedelta(days=days)]}
+    rows = [d for d in dailies if date.fromisoformat(d["date"]) > ctx.today - timedelta(days=days)]
+    # Si el reloj no envía readiness, no mostramos ese campo vacío.
+    rows = [{k: v for k, v in d.items() if not (k == "training_readiness" and v is None)} for d in rows]
+    return {"snapshot": wellness.wellness_snapshot(dailies, ctx.today), "days": rows}
 
 
 def get_training_load(ctx: ToolContext, args: dict) -> Any:
@@ -291,7 +293,7 @@ TOOLS: list[Tool] = [
          get_recent_activities),
     Tool(ToolSpec("get_activity_detail", "Detalle de una actividad: splits/laps y tiempo en zonas de FC.",
                   _obj({"activity_id": {"type": "string"}}, ["activity_id"])), get_activity_detail),
-    Tool(ToolSpec("get_wellness", "Sueño, HRV, FC en reposo, Body Battery, estrés y readiness con líneas base.",
+    Tool(ToolSpec("get_wellness", "Sueño, HRV, FC en reposo, Body Battery y estrés con líneas base.",
                   _obj({"days": {"type": "integer"}})), get_wellness),
     Tool(ToolSpec("get_training_load", "Forma (CTL), fatiga (ATL), frescura (TSB), ACWR, monotonía y TSS por semana.",
                   _obj()), get_training_load),

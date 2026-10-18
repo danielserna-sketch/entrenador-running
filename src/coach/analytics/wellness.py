@@ -27,8 +27,10 @@ def latest(dailies: list[dict], key: str, days: int = 1, today: date | None = No
 
 
 def wellness_snapshot(dailies: list[dict], today: date) -> dict:
-    keys = ["hrv_last_night", "resting_hr", "sleep_score", "sleep_hours", "body_battery_max",
-            "training_readiness", "stress_avg"]
+    keys = ["hrv_last_night", "resting_hr", "sleep_score", "sleep_hours", "body_battery_max", "stress_avg"]
+    # Training readiness solo si el reloj lo envía alguna vez (Garmin puede no darlo).
+    if any(d.get("training_readiness") is not None for d in dailies):
+        keys.append("training_readiness")
     snap: dict = {"date": today.isoformat()}
     for key in keys:
         vals = latest(dailies, key, 1, today)

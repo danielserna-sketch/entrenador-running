@@ -43,3 +43,24 @@ def test_wellness_and_pain_alerts():
     notes = [{"date": today.isoformat(), "pain": 6, "pain_location": "rodilla"}]
     kinds = {a.kind for a in alerts.evaluate([], dailies, notes, [], today)}
     assert {"hrv_low", "rhr_high", "pain"} <= kinds
+
+
+def test_snapshot_omits_readiness_when_watch_never_sends_it():
+    from coach.analytics import wellness
+
+    today = date(2026, 10, 17)
+    dailies = [{"date": (today - timedelta(days=i)).isoformat(), "resting_hr": 60,
+                "training_readiness": None} for i in range(5)]
+    snap = wellness.wellness_snapshot(dailies, today)
+    assert "training_readiness" not in snap
+    assert "training_readiness_baseline" not in snap
+    assert snap["resting_hr"] == 60
+
+
+def test_snapshot_includes_readiness_when_watch_sends_it():
+    from coach.analytics import wellness
+
+    today = date(2026, 10, 17)
+    dailies = [{"date": today.isoformat(), "resting_hr": 60, "training_readiness": 72}]
+    snap = wellness.wellness_snapshot(dailies, today)
+    assert snap["training_readiness"] == 72
