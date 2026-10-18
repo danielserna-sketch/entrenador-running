@@ -197,6 +197,23 @@ READINESS_TSS_FACTOR = 0.85  # bajar 15% la carga
 START_TSS_PER_SESSION = 35  # SUPUESTO: ~40 min en Z2 por sesión cuando no hay historial de carga
 
 
+# --------------------------------------------------------------------------
+# Predicción de carrera (ver analytics/prediction.py). Fórmulas publicadas: Riegel 1981, Daniels-Gilbert
+# (VDOT), Tanda 2011. Pesos, rangos y ajustes son SUPUESTO basados en los errores reportados.
+# --------------------------------------------------------------------------
+RIEGEL_EXPONENT = 1.06
+RIEGEL_MARATHON_EXPONENT = 1.08  # SUPUESTO: Riegel es optimista en maratón (Vickers & Vertosick 2016)
+PREDICTION_WEIGHTS = {"riegel": 1.0, "vdot": 1.0, "tanda": 1.0,
+                      "garmin": {"5k": 0.6, "10k": 0.6, "half": 0.4, "marathon": 0.3}}
+PREDICTION_RANGE_PCT = {"5k": 0.02, "10k": 0.03, "half": 0.04, "marathon": 0.06}
+# SUPUESTO (Peronnet 1991; Ciudad de México 2.240 m: 5K/10K ~4-6% más lentos): ~2,5% por cada 1.000 m
+# por encima de 500 m.
+ALTITUDE_SLOWDOWN_PER_1000M = 0.025
+ALTITUDE_FREE_M = 500
+# SUPUESTO: volumen mínimo (km/semana) y fondo más largo (km) para que la predicción larga sea realista.
+DURABILITY_MIN = {"half": (25, 15), "marathon": (40, 28)}
+
+
 def max_quality_sessions(phase: str, sessions_max: int) -> int:
     cap = MAX_QUALITY_SESSIONS[phase]
     return min(cap, MAX_QUALITY_SESSIONS_LOW_FREQ) if sessions_max <= 3 else cap

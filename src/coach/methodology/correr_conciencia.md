@@ -90,6 +90,22 @@ más de 10% de una semana a otra.
   atleta duerme menos de 6 h 3 noches seguidas, o si reporta dolor ≥ 4/10 en la semana, la semana
   siguiente baja 15% la carga y tiene una sesión de calidad menos. Explícale el porqué.
 
+## Predicción de carrera
+- Se combinan varios métodos y se da un **rango con confianza**, no un solo número:
+  - **Riegel** (T2 = T1 × (D2/D1)^1.06): bien calibrado hasta media maratón. *Supuesto:* hacia maratón
+    desde distancias cortas se usa 1.08, porque Riegel suele ser optimista en maratón (Vickers & Vertosick 2016).
+  - **VDOT de Daniels:** muy preciso en corredores rápidos; pierde precisión en maratones de más de 4 h.
+  - **Tanda (2011):** ritmo de maratón desde los km por semana y el ritmo medio de las últimas 8 semanas
+    (error de ~4-5 min en corredores de 2:47 a 3:36).
+  - **Garmin (VO2max):** útil como tendencia; optimista en media y maratón.
+  - **Velocidad crítica:** solo informativa.
+- Las marcas recientes pesan más; las de hace más de un año no se usan.
+- La maratón es la distancia más difícil de predecir: depende de la **durabilidad** (resistir el deterioro en
+  esfuerzos largos). *Supuesto:* sin ≥40 km/semana y un fondo de ≥28 km, el tiempo real puede ser más lento.
+- *Supuesto:* **altura**: ~2,5% más lento por cada 1.000 m por encima de 500 m (a 2.240 m, los 5K y 10K son
+  ~4-6% más lentos). Quien entrena en altura y compite al nivel del mar suele correr más rápido.
+- Con las tablas del método, una marca de 10K también ubica el nivel del plan de media maratón.
+
 ## Frecuencia semanal
 - El número de sesiones depende del nivel actual (mejor marca). **No entrenar más días de los
   que indica la tabla**: pasar de 1 a 6 sesiones solo mejora la velocidad ~1% y aumenta el riesgo
@@ -127,3 +143,6 @@ más de 10% de una semana a otra.
   pequeña en VO2pico.
 - Llanos-Lagos et al. (2024), Sports Medicine (metaanálisis) y Blagrove et al. (2018), Sports Medicine:
   la fuerza mejora la economía de carrera en fondistas.
+- Predicción: Riegel (1981); Daniels y Gilbert (VDOT); Vickers & Vertosick (2016), BMC Sports Sci Med
+  Rehabil; Tanda (2011), J Hum Sport Exerc 6(3):511-520; estudio de Valencia (2025), Frontiers in
+  Physiology; Jones (2023), J Physiol (durabilidad); Peronnet et al. (1991) (altura).
