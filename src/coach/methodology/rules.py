@@ -161,3 +161,42 @@ MIN_BASE_WEEKS = 4  # SUPUESTO
 
 # Intensidad típica (IF) por zona, para estimar TSS planeado. SUPUESTO (Friel).
 ZONE_IF = {"Z1": 0.65, "Z2": 0.75, "Z3": 0.85, "Z4": 0.95, "Z5a": 1.0, "Z5b": 1.05, "Z5c": 1.12}
+
+# --------------------------------------------------------------------------
+# Primero lento: distribución de intensidad
+# Fuentes: Andrés Ramírez ("¡Corre despacio!", ~80% en Z2, fondos en Z2, Z2 ≈ ritmo de 10K + 1 min/km);
+# Esteve-Lanao et al. 2007 (JSCR 21(3):943-949); Oliveira et al. 2024 (Sports Med).
+# --------------------------------------------------------------------------
+EASY_ZONES = {"Z1", "Z2"}
+MODERATE_ZONES = {"Z3"}
+HARD_ZONES = {"Z4", "Z5a", "Z5b", "Z5c"}
+EASY_SHARE_MIN = 0.80  # publicado: ~80% del tiempo en zona baja
+# SUPUESTO: más exigente en base (solo correr despacio) y en afinamiento.
+EASY_SHARE_MIN_BY_PHASE = {"base": 0.90, "build": EASY_SHARE_MIN, "specialty": EASY_SHARE_MIN, "taper": 0.85}
+# SUPUESTO: sesiones de calidad (series, tempo, test o cualquier paso en Z3 o más) por semana.
+MAX_QUALITY_SESSIONS = {"base": 1, "build": 2, "specialty": 2, "taper": 1}
+MAX_QUALITY_SESSIONS_LOW_FREQ = 1  # quien entrena 3 días o menos
+LONG_RUN_ZONES = {"Z1", "Z2"}  # publicado: los fondos casi siempre en Z2
+LONG_RUN_FAST_SHARE_SPECIALTY = 0.25  # SUPUESTO: en el específico, hasta 25% del fondo a ritmo de carrera
+EASY_PACE_OFFSET_FROM_10K_S = 60  # publicado: Z2 de ritmo ≈ 1 min/km más lenta que el ritmo de 10K
+
+# SUPUESTO (Carlos Rojo, divulgación): sesiones de calidad bien preparadas y medidas.
+QUALITY_WARMUP_MIN = 15  # calentamiento de 15-25 min a trote muy suave
+MAX_INTERVAL_KM = {"5k": 6.0, "10k": 9.0, "half": 10.0, "marathon": 14.0}  # km de series por sesión
+
+# SUPUESTO (convención de entrenadores, no umbral validado): desacople aeróbico en rodajes suaves.
+DECOUPLING_OK = 0.05
+DECOUPLING_MIN_MINUTES = 40
+
+# SUPUESTO: ajuste de la semana por bienestar.
+HRV_LOW_SD = 1.0  # HRV más de 1 desviación bajo su línea base...
+HRV_LOW_DAYS = 2  # ...durante 2 días seguidos
+SLEEP_LOW_HOURS = 6.0
+SLEEP_LOW_DAYS = 3
+READINESS_TSS_FACTOR = 0.85  # bajar 15% la carga
+START_TSS_PER_SESSION = 35  # SUPUESTO: ~40 min en Z2 por sesión cuando no hay historial de carga
+
+
+def max_quality_sessions(phase: str, sessions_max: int) -> int:
+    cap = MAX_QUALITY_SESSIONS[phase]
+    return min(cap, MAX_QUALITY_SESSIONS_LOW_FREQ) if sessions_max <= 3 else cap

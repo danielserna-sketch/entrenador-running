@@ -7,7 +7,7 @@ se le devuelven para que corrija (máximo MAX_ATTEMPTS intentos).
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 
 from coach.analytics import cadence
 from coach.llm.base import LLMClient, SystemPrompt
@@ -81,6 +81,11 @@ def _main_zone(session: dict) -> str | None:
     return best
 
 
+def _pace(seconds: float) -> str:
+    seconds = round(seconds)
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
 def build_prompt(ctx: dict) -> str:
     w = ctx["week"]
     lines = [
@@ -91,10 +96,21 @@ def build_prompt(ctx: dict) -> str:
         f"Sesiones: recomendado {ctx['sessions_recommended']}, máximo {ctx['sessions_max']}.",
         f"Días disponibles: {', '.join(ctx['days_available']) or 'cualquiera'}.",
         f"Sesión más larga permitida: {ctx.get('longest_session_min') or 'sin límite definido'} min.",
-        ("Distribuye la carga sin dos sesiones intensas en días consecutivos. Incluye una sesión larga "
-        "en zona baja. Usa cadence_focus=true en 1-2 sesiones para trabajar cadencia con metrónomo."),
+        (f"PRIMERO LENTO: al menos {rules.EASY_SHARE_MIN_BY_PHASE[w['phase']]:.0%} del tiempo en Z1-Z2 "
+         f"(sin contar test ni carrera). Máximo {ctx.get('max_quality', 2)} sesiones de calidad (Z3 o más), "
+         "nunca en días consecutivos; el resto son rodajes suaves. El fondo va en Z1-Z2."),
+        (f"Series y tempo: empieza con {rules.QUALITY_WARMUP_MIN}-25 min de calentamiento muy suave y termina con "
+         "5-10 min de enfriamiento; ritmos medidos para terminar entero, no al máximo."
+         + (f" Máximo {rules.MAX_INTERVAL_KM[ctx['distance']]} km de series por sesión."
+            if ctx.get("distance") in rules.MAX_INTERVAL_KM else "")),
+        "Usa cadence_focus=true en 1-2 sesiones para trabajar cadencia con metrónomo.",
         "Cada paso con duración (duration_min) o distancia (distance_km) y una zona Friel.",
     ]
+    if ctx.get("easy_ceiling_s"):
+        lines.append(f"Ritmo de rodaje fácil: nunca más rápido que {_pace(ctx['easy_ceiling_s'])}/km.")
+    if (ctx.get("readiness") or {}).get("reason"):
+        lines.append(f"Ajuste por bienestar: {ctx['readiness']['reason']}. La carga ya se bajó; prioriza rodajes "
+                     "suaves y cortos.")
     if ctx.get("needs_test"):
         lines.append("OBLIGATORIO: incluye una sesión type='test': calentamiento 15 min Z1-Z2, "
                      "20 min al máximo esfuerzo sostenible (zone Z4, note 'Test 20 min: esfuerzo máximo "
@@ -117,6 +133,57 @@ def build_prompt(ctx: dict) -> str:
     return "\n".join(lines)
 
 
+def fallback_week(ctx: dict, zones: dict | None) -> dict:
+    """Semana segura: rodajes en Z2 en los días disponibles y un fondo en Z2, escalados al TSS objetivo.
+    Incluye el test si hace falta y la carrera si cae en la semana."""
+    w = ctx["week"]
+    monday = date.fromisoformat(w["week_start"])
+    available = [d.lower() for d in ctx.get("days_available") or []] or list(validator.WEEKDAYS)
+    days = [i for i, name in enumerate(validator.WEEKDAYS) if name in available]
+    n = max(1, min(ctx.get("sessions_recommended") or len(days), len(days)))
+    picked = [days[round(i * (len(days) - 1) / (n - 1))] for i in range(n)] if n > 1 else [days[-1]]
+    picked = sorted(set(picked))
+    race_day = None
+    if ctx.get("race"):
+        race = date.fromisoformat(ctx["race"]["date"])
+        if monday <= race <= monday + timedelta(days=6):
+            race_day = race.weekday()
+            picked = [d for d in picked if d != race_day]
+
+    def day(i: int) -> str:
+        return (monday + timedelta(days=i)).isoformat()
+
+    sessions: list[dict] = []
+    if ctx.get("needs_test") and picked:
+        sessions.append({"date": day(picked.pop(0)), "title": "Test 20 min", "type": "test", "cadence_focus": False,
+                         "description": "Calentamiento suave, 20 min al máximo esfuerzo sostenible y enfriamiento.",
+                         "steps": [{"kind": "warmup", "duration_min": 15, "zone": "Z1"},
+                                   {"kind": "interval", "duration_min": 20, "zone": "Z4",
+                                    "note": "Test 20 min: esfuerzo máximo sostenido"},
+                                   {"kind": "cooldown", "duration_min": 10, "zone": "Z1"}]})
+    if race_day is not None:
+        km = rules.DISTANCE_KM.get(ctx["race"]["distance"], 10.0)
+        sessions.append({"date": day(race_day), "title": "Carrera", "type": "tempo", "cadence_focus": False,
+                         "description": "Día de carrera.", "steps": [{"kind": "main", "distance_km": km, "zone": "Z4"}]})
+    if picked:
+        done = sum(validator.session_tss(s, zones) for s in sessions)
+        z2_tss_per_min = rules.ZONE_IF["Z2"] ** 2 * 100 / 60
+        minutes = max(w["target_tss"] - done, 0) / z2_tss_per_min
+        cap = ctx.get("longest_session_min") or 150
+        long_min = min(round(minutes * 0.4), cap) if len(picked) > 1 else min(round(minutes), cap)
+        rest = picked[:-1]
+        each = min(round((minutes - long_min) / len(rest)), cap) if rest else 0
+        for d in rest:
+            sessions.append({"date": day(d), "title": "Rodaje suave", "type": "easy", "cadence_focus": False,
+                             "description": "Rodaje en Z2: conversando, sin apurarte.",
+                             "steps": [{"kind": "main", "duration_min": max(each, 20), "zone": "Z2"}]})
+        sessions.append({"date": day(picked[-1]), "title": "Fondo suave", "type": "long", "cadence_focus": False,
+                         "description": "Fondo en Z2, ritmo cómodo de principio a fin.",
+                         "steps": [{"kind": "main", "duration_min": max(long_min, 30), "zone": "Z2"}]})
+    return {"summary": "Semana segura de rodajes suaves en Z2 (la propuesta automática no cumplía las reglas).",
+            "sessions": sessions, "strength_notes": "Fuerza 1-2 veces por semana, 20-30 min, en días suaves."}
+
+
 def generate_week(llm: LLMClient, system: SystemPrompt, ctx: dict, zones: dict | None,
                   activities: list[dict]) -> dict:
     week_start = date.fromisoformat(ctx["week"]["week_start"])
@@ -132,10 +199,23 @@ def generate_week(llm: LLMClient, system: SystemPrompt, ctx: dict, zones: dict |
             week, week_start=week_start, phase=ctx["week"]["phase"], target_tss=ctx["week"]["target_tss"],
             sessions_max=ctx["sessions_max"], days_available=ctx["days_available"],
             longest_session_min=ctx.get("longest_session_min"), needs_test=ctx.get("needs_test", False),
-            zones=zones,
+            zones=zones, distance=ctx.get("distance"), max_quality=ctx.get("max_quality"),
         )
         if not errors:
             break
+
+    llm_errors, fallback = errors, False
+    if errors:
+        # El LLM no logró cumplir las reglas: semana segura de rodajes suaves, si esa sí las cumple.
+        candidate = fallback_week(ctx, zones)
+        candidate_errors = validator.validate_week(
+            candidate, week_start=week_start, phase=ctx["week"]["phase"], target_tss=ctx["week"]["target_tss"],
+            sessions_max=ctx["sessions_max"], days_available=ctx["days_available"],
+            longest_session_min=ctx.get("longest_session_min"), needs_test=ctx.get("needs_test", False),
+            zones=zones, distance=ctx.get("distance"), max_quality=ctx.get("max_quality"),
+        )
+        if not candidate_errors:
+            week, errors, fallback = candidate, [], True
 
     for s in week["sessions"]:
         s["tss"] = validator.session_tss(s, zones)
@@ -155,4 +235,6 @@ def generate_week(llm: LLMClient, system: SystemPrompt, ctx: dict, zones: dict |
         "planned_tss": round(sum(s["tss"] for s in week["sessions"]), 1),
         "validation_errors": errors,
         "attempts": attempt + 1,
+        "fallback": fallback,
+        "llm_errors": llm_errors if fallback else [],
     }

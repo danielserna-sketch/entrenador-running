@@ -6,6 +6,7 @@ from datetime import date, timedelta
 
 from coach.agent.athlete_profile import normalize_best_times
 from coach.analytics import history, load
+from coach.analytics import zones as zones_mod
 from coach.methodology import rules
 
 ZONES_MAX_AGE_DAYS = 56  # SUPUESTO: repetir el test de umbral cada ~8 semanas
@@ -32,6 +33,14 @@ def reference_time(profile: dict, distance: str, records: dict | None = None) ->
             eq = rules.riegel(t, rules.DISTANCE_KM[other], rules.DISTANCE_KM[distance])
             return int(eq), f"equivalente desde {other} (Riegel, {source[other]})"
     return None, "sin marcas"
+
+
+def with_easy_ceiling(zones: dict | None, profile: dict, records: dict | None) -> dict | None:
+    """Zonas con el ritmo máximo de rodaje fácil (para los objetivos de los entrenamientos en Garmin)."""
+    if not zones:
+        return zones
+    ten_k, _ = reference_time(profile, "10k", records)
+    return {**zones, "easy_ceiling_s": zones_mod.easy_pace_ceiling(zones, ten_k)}
 
 
 def assess(profile: dict, activities: list[dict], zones: dict | None, today: date,
@@ -76,7 +85,8 @@ def assess(profile: dict, activities: list[dict], zones: dict | None, today: dat
         "half_level": level,
         "ctl": ctl,
         "avg_weekly_tss_4w": round(avg_weekly_tss, 1),
-        "start_weekly_tss": round(max(avg_weekly_tss, ctl * 7, 120.0), 1),
+        # Empezar un poco por debajo de la carga reciente; sin historial, un piso según las sesiones.
+        "start_weekly_tss": round(max(avg_weekly_tss * 0.9, ctl * 7 * 0.9, rec * rules.START_TSS_PER_SESSION), 1),
         "needs_threshold_test": needs_test,
         "zones_age_days": zones_age,
         "days_available": days_available,

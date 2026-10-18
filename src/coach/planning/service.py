@@ -10,7 +10,8 @@ from coach.agent.athlete_profile import REQUIRED_PROFILE
 from coach.analytics import compliance, load, wellness
 from coach.garmin.provider import GarminProvider
 from coach.llm.base import LLMClient, SystemPrompt
-from coach.planning import assessment, microcycle, periodization
+from coach.methodology import rules
+from coach.planning import assessment, microcycle, periodization, readiness
 from coach.planning.garmin_workout_builder import build_workout
 from coach.reports import builder, email_sender
 from coach.storage.repo import Repo
@@ -83,14 +84,14 @@ class PlanService:
         prev_summary = None
         if prev_week:
             prev_acts = [a for a in activities if prev_monday <= date.fromisoformat(a["date"]) < monday]
-            results = compliance.match_week(prev_week["sessions"], prev_acts, self.today)
+            results = compliance.match_week(prev_week["sessions"], prev_acts, self.today, zones)
             prev_summary = {
                 "colores": compliance.summarize(results),
                 "tss_planeado": prev_week.get("planned_tss"),
                 "tss_real": load.weekly_summary(activities, prev_monday)["tss"],
                 "sesiones": [{"fecha": r["session"]["date"] if r["session"] else r["activity"]["date"],
                               "titulo": (r["session"] or {}).get("title"), "color": r["color"],
-                              "ratio": r["ratio"]} for r in results],
+                              "ratio": r["ratio"], "intensidad": r.get("intensity_color")} for r in results],
             }
         dailies = self.repo.dailies(self.today - timedelta(days=35), self.today)
         # El test va cuando no hay zonas o están viejas, en la semana 1 o en una de descarga.
@@ -98,17 +99,27 @@ class PlanService:
         zones_stale = zones_age is None or zones_age > assessment.ZONES_MAX_AGE_DAYS
         needs_test = zones_stale and (info["index"] == 1 or info["kind"] == "descarga")
         level = diag.get("half_level") or {}
+        notes = self.repo.notes(self.today - timedelta(days=10))
+        adjust = readiness.assess(dailies, notes, self.today)
+        if adjust["reason"]:
+            info = {**info, "target_tss": round(info["target_tss"] * adjust["tss_factor"])}
+        sessions_max = diag.get("sessions_max", 3)
+        workout_zones = assessment.with_easy_ceiling(zones, profile, self.repo.get_records())
         return {
             "week": info,
+            "distance": macro["distance"],
             "sessions_recommended": diag.get("sessions_recommended", 3),
-            "sessions_max": diag.get("sessions_max", 3),
+            "sessions_max": sessions_max,
+            "max_quality": max(rules.max_quality_sessions(info["phase"], sessions_max) + adjust["quality_delta"], 0),
+            "easy_ceiling_s": (workout_zones or {}).get("easy_ceiling_s"),
+            "readiness": adjust,
             "days_available": profile.get("days_available", []),
             "longest_session_min": level.get("longest_session_min") or profile.get("longest_session_min"),
             "needs_test": needs_test,
             "zones_table": {"pace": (zones or {}).get("pace"), "hr": (zones or {}).get("hr")} if zones else None,
             "previous_week": prev_summary,
             "wellness": wellness.wellness_snapshot(dailies, self.today),
-            "notes": self.repo.notes(self.today - timedelta(days=10)),
+            "notes": notes,
             "race": {"date": macro["race_date"], "distance": macro["distance"]},
             "adjustments": adjustments,
         }
@@ -120,6 +131,14 @@ class PlanService:
         old = self.repo.get_week(monday)
         week = microcycle.generate_week(self.llm, self.system, ctx, zones, activities)
         week["generated"] = self.today.isoformat()
+        if week["validation_errors"]:
+            # Primero lento y seguro: una semana que incumple las reglas no llega al reloj.
+            week["needs_review"] = True
+            log.warning("Semana %s con errores; no se publica: %s", monday, week["validation_errors"])
+            if old:
+                return {**old, "needs_review": True, "rejected_errors": week["validation_errors"]}
+            self.repo.save_week(week)
+            return week
         if publish:
             if old:
                 self.unpublish_week(old)
@@ -130,6 +149,7 @@ class PlanService:
         return week
 
     def publish_week(self, week: dict, zones: dict | None) -> None:
+        zones = assessment.with_easy_ceiling(zones, self.repo.get_profile(), self.repo.get_records())
         for s in week["sessions"]:
             if date.fromisoformat(s["date"]) < self.today:
                 continue
@@ -175,6 +195,9 @@ def _week_brief(week: dict) -> dict:
     return {
         "week_start": week["week_start"], "phase": week["phase_label"], "summary": week["summary"],
         "planned_tss": week["planned_tss"], "validation_errors": week["validation_errors"],
+        "semana_segura": week.get("fallback", False),
+        "aviso": ("La semana generada incumplía las reglas y no se publicó en Garmin; avísale al atleta."
+                  if week.get("needs_review") else None),
         "sessions": [{"date": s["date"], "title": s["title"], "type": s["type"], "duration_min": s["duration_min"],
                       "tss": s["tss"], "cadence": s.get("cadence"), "garmin": bool(s.get("garmin_workout_id"))}
                      for s in week["sessions"]],

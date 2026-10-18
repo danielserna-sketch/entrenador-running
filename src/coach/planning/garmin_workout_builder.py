@@ -18,6 +18,8 @@ Los objetivos se envían como rango de pace (m/s) si hay zonas de pace, si no co
 
 from __future__ import annotations
 
+from coach.methodology import rules
+
 STEP_TYPES = {
     "warmup": (1, "warmup"),
     "cooldown": (2, "cooldown"),
@@ -43,10 +45,15 @@ def _target(zone: str | None, zones: dict, prefer: str = "pace") -> dict:
     if pace and (prefer == "pace" or not hr):
         # Garmin: límite inferior = pace más lento (menos m/s).
         slow = min(pace["slow_s"], 600)  # evita rangos absurdos en Z1
+        fast = pace["fast_s"]
+        # Primero lento: en zona fácil el reloj no deja ir más rápido que el ritmo máximo de rodaje.
+        if zone in rules.EASY_ZONES and zones.get("easy_ceiling_s"):
+            fast = max(fast, zones["easy_ceiling_s"])
+            slow = max(slow, fast + 20)
         return {
             "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"},
             "targetValueOne": _pace_s_to_mps(slow),
-            "targetValueTwo": _pace_s_to_mps(pace["fast_s"]),
+            "targetValueTwo": _pace_s_to_mps(fast),
         }
     if hr:
         return {

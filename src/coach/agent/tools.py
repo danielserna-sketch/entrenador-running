@@ -10,12 +10,13 @@ from datetime import date, timedelta
 from typing import Any
 
 from coach.agent import athlete_profile
-from coach.analytics import alerts, compliance, history, load, wellness
+from coach.analytics import alerts, compliance, decoupling, history, load, wellness
 from coach.analytics import zones as zones_mod
 from coach.garmin.provider import GarminAuthError, GarminProvider
 from coach.garmin.sync import enrich_activity
 from coach.llm.base import ToolSpec
-from coach.planning import periodization
+from coach.methodology import rules
+from coach.planning import assessment, periodization
 from coach.planning.garmin_workout_builder import build_workout
 from coach.planning.microcycle import WEEK_SCHEMA
 from coach.planning.service import PlanService
@@ -71,6 +72,13 @@ def get_activity_detail(ctx: ToolContext, args: dict) -> Any:
         return {"error": "No encontré esa actividad. Usa get_recent_activities para ver los ids."}
     out = _activity_brief(activity)
     out["detail"] = activity.get("detail") or ctx.garmin.activity_detail(args["activity_id"])
+    if activity.get("main_zone") in rules.EASY_ZONES:
+        value = decoupling.aerobic_decoupling(out["detail"].get("splits") or [])
+        if value is not None:
+            out["desacople_aerobico"] = {
+                "valor": value, "bueno": value <= rules.DECOUPLING_OK,
+                "nota": "Compara ritmo/FC de la primera y la segunda mitad. Menos de 5% sugiere buena base "
+                        "aeróbica (convención, no umbral validado; el calor y la hidratación lo suben)."}
     return out
 
 
@@ -125,7 +133,7 @@ def get_compliance(ctx: ToolContext, args: dict) -> Any:
     if not week:
         return {"error": "No hay semana planeada para esa fecha."}
     acts = ctx.repo.activities(monday, monday + timedelta(days=6))
-    results = compliance.match_week(week["sessions"], acts, ctx.today)
+    results = compliance.match_week(week["sessions"], acts, ctx.today, ctx.repo.get_zones())
     return {
         "semana": monday.isoformat(),
         "resumen": compliance.summarize(results),
@@ -133,6 +141,7 @@ def get_compliance(ctx: ToolContext, args: dict) -> Any:
                       "planeado": (r["session"] or {}).get("title"),
                       "realizado": (r["activity"] or {}).get("name"),
                       "color": r["color"], "emoji": compliance.EMOJI.get(r["color"], "⏳"),
+                      "intensidad": r.get("intensity_color"),
                       "ratio": r["ratio"], "metrica": r["metric"]} for r in results],
     }
 
@@ -294,7 +303,8 @@ def modify_session(ctx: ToolContext, args: dict) -> Any:
         session["duration_min"] = round(validator.estimated_duration_s(session["steps"], zones) / 60)
         week["sessions"].append(session)
     if action in ("move", "replace") and date.fromisoformat(session["date"]) >= ctx.today:
-        workout_id = ctx.garmin.create_workout(build_workout(session, zones))
+        workout_zones = assessment.with_easy_ceiling(zones, ctx.repo.get_profile(), ctx.repo.get_records())
+        workout_id = ctx.garmin.create_workout(build_workout(session, workout_zones))
         ctx.garmin.schedule_workout(workout_id, date.fromisoformat(session["date"]))
         session["garmin_workout_id"] = workout_id
     week["sessions"].sort(key=lambda s: s["date"])
@@ -305,7 +315,7 @@ def modify_session(ctx: ToolContext, args: dict) -> Any:
 
 
 def create_and_schedule_workout(ctx: ToolContext, args: dict) -> Any:
-    zones = ctx.repo.get_zones()
+    zones = assessment.with_easy_ceiling(ctx.repo.get_zones(), ctx.repo.get_profile(), ctx.repo.get_records())
     session = args["session"]
     workout_id = ctx.garmin.create_workout(build_workout(session, zones))
     ctx.garmin.schedule_workout(workout_id, date.fromisoformat(session["date"]))

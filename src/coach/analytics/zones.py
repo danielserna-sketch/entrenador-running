@@ -66,6 +66,16 @@ def build_zones(threshold_pace_s: float | None, threshold_hr: float | None, *, s
     }
 
 
+def easy_pace_ceiling(zones: dict | None, ten_k_s: float | None) -> float | None:
+    """Ritmo más rápido permitido en un rodaje fácil (s/km): el más lento entre el límite rápido de la Z2
+    de Friel y el ritmo de 10K + 1 min/km (Andrés Ramírez). Ante la duda, más lento."""
+    z2 = next((z for z in (zones or {}).get("pace", []) if z["zone"] == "Z2"), None)
+    candidates = [z2["fast_s"]] if z2 else []
+    if ten_k_s:
+        candidates.append(ten_k_s / 10 + rules.EASY_PACE_OFFSET_FROM_10K_S)
+    return round(max(candidates)) if candidates else None
+
+
 def zone_for_hr(hr: float, zones: dict) -> str | None:
     for z in zones.get("hr", []):
         if z["min_bpm"] <= hr <= z["max_bpm"]:
