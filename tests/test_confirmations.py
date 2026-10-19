@@ -236,3 +236,17 @@ def test_workout_card_survives_missing_gps(monkeypatch):
 
     ctx.plan.garmin = SimpleNamespace(activity_route=no_gps)
     assert tools.share_last_workout_card(ctx, {"comment": "Bien"})["ok"] is True and sent
+
+
+def test_activity_route_calls_api_with_keyword_args():
+    from coach.garmin.unofficial import UnofficialGarmin
+
+    garmin = object.__new__(UnofficialGarmin)  # sin login: solo probamos la llamada a la API
+
+    class Api:
+        def get_activity_details(self, activity_id, maxchart=2000, maxpoly=4000):
+            assert maxpoly == 4000 and activity_id == "123"
+            return {"geoPolylineDTO": {"polyline": [{"lat": 4.6, "lon": -74.1}, {"lat": 4.61, "lon": -74.09}]}}
+
+    garmin.api = Api()
+    assert garmin.activity_route("123") == [(4.6, -74.1), (4.61, -74.09)]

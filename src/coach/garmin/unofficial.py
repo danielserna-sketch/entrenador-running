@@ -55,8 +55,11 @@ class UnofficialGarmin:
     def activity_route(self, activity_id: int | str) -> list[tuple[float, float]]:
         """Puntos (lat, lon) del recorrido. Lista vacía si la actividad no tiene GPS.
         La forma de la respuesta de Garmin (geoPolylineDTO.polyline) no está verificada contra la cuenta real."""
-        details = self._call(self.api.get_activity_details, str(activity_id), maxpoly=4000) or {}
+        # _call pasa solo argumentos posicionales: el tamaño máximo va en la lambda.
+        details = self._call(lambda aid: self.api.get_activity_details(aid, maxpoly=4000), str(activity_id)) or {}
         points = ((details.get("geoPolylineDTO") or {}).get("polyline")) or []
+        if not points:
+            log.info("Detalle de actividad sin polyline; claves: %s", sorted(details)[:30])
         return [(p["lat"], p["lon"]) for p in points if p.get("lat") is not None and p.get("lon") is not None]
 
     def daily_wellness(self, day: date) -> dict:
