@@ -100,7 +100,9 @@ def test_voice_note_is_transcribed_and_answered(monkeypatch):
     result, wa, coach = _run(monkeypatch, {"id": "w1", "type": "audio", "media_id": "m1", "text": None})
     assert result == {"batchItemFailures": []}
     assert wa.downloads == ["m1"]
-    assert coach.asked == ["me duele la rodilla"]
+    assert len(coach.asked) == 1
+    assert coach.asked[0].startswith(agent_worker.VOICE_PROMPT)
+    assert coach.asked[0].endswith("me duele la rodilla")
     assert wa.sent == ["🎙️ Entendí: me duele la rodilla", "respuesta"]
 
 

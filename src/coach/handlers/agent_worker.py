@@ -18,6 +18,8 @@ NON_TEXT_MSG = "Por ahora solo entiendo mensajes de texto y notas de voz 🙂. �
 ERROR_MSG = "Tuve un problema procesando tu mensaje. Inténtalo de nuevo en un momento."
 VOICE_ERROR_MSG = "No pude escuchar tu nota de voz. ¿Me la escribes?"
 VOICE_TOO_LONG_MSG = "Tu nota dura más de 3 minutos. ¿Me la resumes en texto o la mandas en partes?"
+VOICE_PROMPT = ("[Nota de voz transcrita. Ya le mostraste al atleta lo que entendiste: respóndela directamente, "
+                "sin pedirle que confirme la transcripción.] ")
 
 
 def handle_voice(wa: WhatsAppClient, to: str, media_id: str) -> str | None:
@@ -51,9 +53,10 @@ def handler(event, context):
             wa.mark_read(body["id"])
             text = body.get("text")
             if body.get("type") == "audio":
-                text = handle_voice(wa, to, body["media_id"])
-                if text is None:
+                transcript = handle_voice(wa, to, body["media_id"])
+                if transcript is None:
                     continue
+                text = VOICE_PROMPT + transcript
             if not text:
                 wa.send_text(to, NON_TEXT_MSG)
                 continue
