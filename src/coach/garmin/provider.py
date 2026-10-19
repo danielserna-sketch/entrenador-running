@@ -21,6 +21,9 @@ class GarminProvider(Protocol):
     def activity_detail(self, activity_id: int | str) -> dict:
         """Splits/laps y tiempo en zonas de una actividad."""
 
+    def activity_route(self, activity_id: int | str) -> list[tuple[float, float]]:
+        """Puntos (lat, lon) del recorrido de una actividad; vacío si no tiene GPS."""
+
     def daily_wellness(self, day: date) -> dict:
         """Sueño, HRV, FC reposo, Body Battery, estrés y training readiness del día."""
 

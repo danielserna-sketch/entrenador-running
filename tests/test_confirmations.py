@@ -195,3 +195,44 @@ def test_send_chart_reports_missing_data_and_sends_when_available(monkeypatch):
 
 def test_send_chart_without_channel_is_refused():
     assert "error" in tools.send_chart(_ctx(), {"kind": "cadence"})
+
+
+def _card(route):
+    return {"title": "Rodaje suave", "date_label": "dom 18 oct", "distance_km": 6.1, "pace": "6:44",
+            "duration_min": 41, "avg_hr": 129, "zones": [{"zone": 1, "seconds": 2340}, {"zone": 2, "seconds": 120}],
+            "route": route, "comment": "Z1 controlada y ritmo parejo."}
+
+
+def test_workout_card_renders_png_with_and_without_route():
+    from coach.reports.workout_card import render_workout_card
+
+    route = [(4.6, -74.08), (4.61, -74.07), (4.615, -74.075), (4.612, -74.079)]
+    for points in (route, []):
+        png = render_workout_card(_card(points))
+        assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 10_000
+
+
+def test_last_workout_card_is_sent_with_route(monkeypatch):
+    sent = []
+    ctx = _ctx(send_image=lambda png, caption: sent.append((png, caption)))
+    ctx.repo.activities = lambda start, end: [{"activity_id": "a1", "date": "2026-10-18", "name": "Rodaje suave",
+                                               "distance_km": 6.1, "duration_min": 41, "avg_pace_s_per_km": 404,
+                                               "avg_hr": 129}]
+    ctx.repo.get_activity = lambda aid: {"detail": {"hr_time_in_zones": [{"zone": 1, "seconds": 2340}]}}
+    ctx.plan.garmin = SimpleNamespace(activity_route=lambda aid: [(4.6, -74.08), (4.61, -74.07)])
+    assert tools.share_last_workout_card(ctx, {"comment": "Buen ritmo"}) == {"ok": True, "actividad": "Rodaje suave"}
+    assert sent[0][0][:4] == b"\x89PNG" and sent[0][1] == "Tu último entreno"
+
+
+def test_workout_card_survives_missing_gps(monkeypatch):
+    sent = []
+    ctx = _ctx(send_image=lambda png, caption: sent.append(png))
+    ctx.repo.activities = lambda start, end: [{"activity_id": "a2", "date": "2026-10-18", "name": "Fondo",
+                                               "distance_km": 12, "duration_min": 70, "avg_pace_s_per_km": 350}]
+    ctx.repo.get_activity = lambda aid: None
+
+    def no_gps(aid):
+        raise RuntimeError("sin GPS")
+
+    ctx.plan.garmin = SimpleNamespace(activity_route=no_gps)
+    assert tools.share_last_workout_card(ctx, {"comment": "Bien"})["ok"] is True and sent

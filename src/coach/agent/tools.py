@@ -362,6 +362,43 @@ def send_chart(ctx: ToolContext, args: dict) -> Any:
     return {"error": error} if error else {"ok": True, "enviada": args["kind"]}
 
 
+_DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
+_MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+
+
+def share_last_workout_card(ctx: ToolContext, args: dict) -> Any:
+    from coach.reports import workout_card  # matplotlib: solo cuando hace falta
+
+    if ctx.send_image is None:
+        return {"error": "No puedo enviar imágenes en este canal."}
+    acts = ctx.repo.activities(ctx.today - timedelta(days=60), ctx.today)
+    if not acts:
+        return {"error": "No hay entrenamientos recientes para la tarjeta."}
+    last = max(acts, key=lambda a: a["date"])
+    detail = (ctx.repo.get_activity(last["activity_id"]) or {}).get("detail") or {}
+    try:
+        route = ctx.garmin.activity_route(last["activity_id"])
+    except GarminAuthError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.warning("Sin ruta GPS para la tarjeta: %s", e)
+        route = []
+    day = date.fromisoformat(last["date"])
+    card = {
+        "title": last.get("name") or "Entrenamiento",
+        "date_label": f"{_DIAS[day.weekday()]} {day.day} {_MESES[day.month - 1]}",
+        "distance_km": last.get("distance_km") or 0,
+        "pace": zones_mod.pace_to_str(last["avg_pace_s_per_km"]) if last.get("avg_pace_s_per_km") else "—",
+        "duration_min": last.get("duration_min") or 0,
+        "avg_hr": last.get("avg_hr"),
+        "zones": detail.get("hr_time_in_zones") or [],
+        "route": route,
+        "comment": args["comment"][:140],
+    }
+    error = ctx.send_image(workout_card.render_workout_card(card), "Tu último entreno")
+    return {"error": error} if error else {"ok": True, "actividad": card["title"]}
+
+
 # ---------------------------------------------------------------------------- calendario de Garmin
 def _window(ctx: ToolContext, args: dict) -> tuple[date, date]:
     start = date.fromisoformat(args["start"]) if args.get("start") else ctx.today
@@ -675,6 +712,10 @@ TOOLS: list[Tool] = [
     Tool(ToolSpec("create_and_schedule_workout", "Crea un entrenamiento estructurado puntual y lo agenda en Garmin. "
                   "Pide confirmación con botones antes de ejecutarse.",
                   _obj({"session": _SESSION, "resumen": RESUMEN}, ["session", "resumen"])), create_and_schedule_workout),
+    Tool(ToolSpec("share_last_workout_card",
+                  "Genera la tarjeta del último entrenamiento (ruta, distancia, ritmo, FC y zonas) para publicar en "
+                  "redes y te la envía por WhatsApp. 'comment' es una frase corta en español para el atleta.",
+                  _obj({"comment": {"type": "string"}}, ["comment"])), share_last_workout_card),
     Tool(ToolSpec("send_chart",
                   "Envía al atleta por WhatsApp una gráfica: 'fitness' (forma física, CTL/ATL/TSB) o 'cadence' "
                   "(tendencia de cadencia). Úsala cuando pida ver una gráfica.",

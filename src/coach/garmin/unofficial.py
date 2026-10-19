@@ -52,6 +52,13 @@ class UnofficialGarmin:
         zones = self._call(self.api.get_activity_hr_in_timezones, aid)
         return {"splits": mappers.map_splits(splits), "hr_time_in_zones": mappers.map_hr_zones(zones)}
 
+    def activity_route(self, activity_id: int | str) -> list[tuple[float, float]]:
+        """Puntos (lat, lon) del recorrido. Lista vacía si la actividad no tiene GPS.
+        La forma de la respuesta de Garmin (geoPolylineDTO.polyline) no está verificada contra la cuenta real."""
+        details = self._call(self.api.get_activity_details, str(activity_id), maxpoly=4000) or {}
+        points = ((details.get("geoPolylineDTO") or {}).get("polyline")) or []
+        return [(p["lat"], p["lon"]) for p in points if p.get("lat") is not None and p.get("lon") is not None]
+
     def daily_wellness(self, day: date) -> dict:
         d = day.isoformat()
         sleep = self._safe(self.api.get_sleep_data, d)
