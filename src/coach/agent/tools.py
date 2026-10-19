@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -384,19 +385,71 @@ def share_last_workout_card(ctx: ToolContext, args: dict) -> Any:
         log.warning("Sin ruta GPS para la tarjeta: %s", e)
         route = []
     day = date.fromisoformat(last["date"])
+    start = last.get("start_local") or ""
+    time_label = f" · {start[11:16]}" if len(start) >= 16 else ""
     card = {
-        "title": last.get("name") or "Entrenamiento",
-        "date_label": f"{_DIAS[day.weekday()]} {day.day} {_MESES[day.month - 1]}",
+        "title": _card_title(last.get("name")),
+        "date_label": f"{_DIAS[day.weekday()]} {day.day} {_MESES[day.month - 1]}{time_label}",
         "distance_km": last.get("distance_km") or 0,
         "pace": zones_mod.pace_to_str(last["avg_pace_s_per_km"]) if last.get("avg_pace_s_per_km") else "—",
         "duration_min": last.get("duration_min") or 0,
         "avg_hr": last.get("avg_hr"),
         "zones": detail.get("hr_time_in_zones") or [],
         "route": route,
-        "comment": args["comment"][:140],
     }
+    card["comment"] = _coach_comment(ctx, card, _planned_session(ctx, day))
     error = ctx.send_image(workout_card.render_workout_card(card), "Tu último entreno")
-    return {"error": error} if error else {"ok": True, "actividad": card["title"]}
+    return {"error": error} if error else {"ok": True, "actividad": card["title"], "comentario": card["comment"]}
+
+
+def _card_title(name: str | None) -> str:
+    """Garmin nombra las actividades "Lugar - Ciudad · Tipo": en la tarjeta va solo el tipo."""
+    title = (name or "").split("·")[-1].strip()
+    return title or "Entrenamiento"
+
+
+def _planned_session(ctx: ToolContext, day: date) -> dict | None:
+    week = ctx.repo.get_week(periodization.monday_of(day)) if hasattr(ctx.repo, "get_week") else None
+    session = next((s for s in (week or {}).get("sessions", []) if s.get("date") == day.isoformat()), None)
+    return {k: session.get(k) for k in ("title", "type", "main_zone", "duration_min")} if session else None
+
+
+def _plain(text: str) -> str:
+    """Sin emojis ni símbolos: la fuente de la tarjeta no los tiene y saldrían como cuadros."""
+    return "".join(ch for ch in text if unicodedata.category(ch) not in ("So", "Cs", "Co") and ord(ch) <= 0xFFFF)
+
+
+CARD_COMMENT_SCHEMA = {"type": "object", "properties": {"comentario": {"type": "string"}},
+                       "required": ["comentario"], "additionalProperties": False}
+
+
+def _coach_comment(ctx: ToolContext, card: dict, planned: dict | None) -> str:
+    """Comentario del coach sobre ESTE entrenamiento, escrito por el modelo rápido a partir de los datos."""
+    zones = [z for z in card["zones"] if z.get("seconds")]
+    total = sum(z["seconds"] for z in zones)
+    facts = {
+        "tipo": card["title"], "distancia_km": card["distance_km"], "duracion_min": card["duration_min"],
+        "ritmo_min_km": card["pace"], "fc_media": card["avg_hr"],
+        "tiempo_en_zonas": {f"Z{z['zone']}": f"{round(100 * z['seconds'] / total)} %" for z in zones} if total else None,
+        "sesion_planeada": planned,
+    }
+    llm = getattr(ctx.plan, "llm", None)
+    if llm is not None:
+        prompt = ("Escribe el comentario del coach para la tarjeta de redes de este entrenamiento. Una o dos frases, "
+                  "máximo 85 caracteres, en español, tono cercano y concreto: menciona lo que pasó en esta sesión "
+                  "(zonas, ritmo o FC, y si cumplió lo planeado). Sin emojis ni hashtags.\n\n"
+                  + json.dumps(facts, ensure_ascii=False))
+        try:
+            text = _plain(llm.complete_json(ctx.plan.system, prompt, CARD_COMMENT_SCHEMA, tier="fast")["comentario"])
+            if text.strip():
+                return text.strip()[:120]
+        except Exception as e:  # noqa: BLE001
+            log.warning("No se pudo escribir el comentario de la tarjeta: %s", e)
+    if total:
+        top = max(zones, key=lambda z: z["seconds"])
+        return (f"Z{top['zone']} el {round(100 * top['seconds'] / total)} % del tiempo, "
+                f"{card['distance_km']:.1f} km a {card['pace']}/km.")
+    return f"{card['distance_km']:.1f} km a {card['pace']}/km. Un paso más en el plan."
 
 
 # ---------------------------------------------------------------------------- calendario de Garmin
@@ -713,9 +766,9 @@ TOOLS: list[Tool] = [
                   "Pide confirmación con botones antes de ejecutarse.",
                   _obj({"session": _SESSION, "resumen": RESUMEN}, ["session", "resumen"])), create_and_schedule_workout),
     Tool(ToolSpec("share_last_workout_card",
-                  "Genera la tarjeta del último entrenamiento (ruta, distancia, ritmo, FC y zonas) para publicar en "
-                  "redes y te la envía por WhatsApp. 'comment' es una frase corta en español para el atleta.",
-                  _obj({"comment": {"type": "string"}}, ["comment"])), share_last_workout_card),
+                  "Genera la tarjeta del último entrenamiento (ruta, distancia, ritmo, FC, zonas y un comentario del "
+                  "coach sobre esa sesión) para publicar en redes, y se la envía al atleta por WhatsApp.",
+                  _obj()), share_last_workout_card),
     Tool(ToolSpec("send_chart",
                   "Envía al atleta por WhatsApp una gráfica: 'fitness' (forma física, CTL/ATL/TSB) o 'cadence' "
                   "(tendencia de cadencia). Úsala cuando pida ver una gráfica.",

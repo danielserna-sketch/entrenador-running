@@ -220,7 +220,9 @@ def test_last_workout_card_is_sent_with_route(monkeypatch):
                                                "avg_hr": 129}]
     ctx.repo.get_activity = lambda aid: {"detail": {"hr_time_in_zones": [{"zone": 1, "seconds": 2340}]}}
     ctx.plan.garmin = SimpleNamespace(activity_route=lambda aid: [(4.6, -74.08), (4.61, -74.07)])
-    assert tools.share_last_workout_card(ctx, {"comment": "Buen ritmo"}) == {"ok": True, "actividad": "Rodaje suave"}
+    result = tools.share_last_workout_card(ctx, {})
+    assert result["ok"] is True and result["actividad"] == "Rodaje suave"
+    assert result["comentario"] == "Z1 el 100 % del tiempo, 6.1 km a 6:44/km."
     assert sent[0][0][:4] == b"\x89PNG" and sent[0][1] == "Tu último entreno"
 
 
@@ -250,3 +252,38 @@ def test_activity_route_calls_api_with_keyword_args():
 
     garmin.api = Api()
     assert garmin.activity_route("123") == [(4.6, -74.1), (4.61, -74.09)]
+
+
+def test_card_title_keeps_only_workout_type():
+    assert tools._card_title("Cajicá - CC · Rodaje suave") == "Rodaje suave"
+    assert tools._card_title("Fondo largo") == "Fondo largo"
+    assert tools._card_title(None) == "Entrenamiento"
+
+
+def test_card_comment_comes_from_workout_data_without_emojis():
+    seen = {}
+
+    class FakeLLM:
+        def complete_json(self, system, prompt, schema, tier="main"):
+            seen.update(prompt=prompt, tier=tier)
+            return {"comentario": "Z1 controlada y ritmo parejo 🏃"}
+
+    ctx = _ctx()
+    ctx.plan.llm, ctx.plan.system = FakeLLM(), None
+    card = {"title": "Rodaje suave", "distance_km": 6.1, "duration_min": 41, "pace": "6:44", "avg_hr": 129,
+            "zones": [{"zone": 1, "seconds": 2340}, {"zone": 2, "seconds": 120}]}
+    comment = tools._coach_comment(ctx, card, {"title": "Rodaje Z1", "type": "easy"})
+    assert comment == "Z1 controlada y ritmo parejo"
+    assert seen["tier"] == "fast" and "6.1" in seen["prompt"] and "Rodaje Z1" in seen["prompt"]
+
+
+def test_card_comment_falls_back_to_data_when_llm_fails():
+    class BrokenLLM:
+        def complete_json(self, *a, **k):
+            raise RuntimeError("caído")
+
+    ctx = _ctx()
+    ctx.plan.llm, ctx.plan.system = BrokenLLM(), None
+    card = {"title": "Rodaje", "distance_km": 6.1, "duration_min": 41, "pace": "6:44", "avg_hr": 129,
+            "zones": [{"zone": 1, "seconds": 2340}, {"zone": 2, "seconds": 120}]}
+    assert tools._coach_comment(ctx, card, None) == "Z1 el 95 % del tiempo, 6.1 km a 6:44/km."
