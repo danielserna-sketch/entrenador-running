@@ -11,6 +11,7 @@ from typing import Any
 
 from coach.agent import athlete_profile
 from coach.analytics import alerts, compliance, decoupling, history, load, prediction, wellness
+from coach.analytics import cadence as cadence_mod
 from coach.analytics import zones as zones_mod
 from coach.garmin.provider import GarminAuthError, GarminProvider
 from coach.garmin.sync import enrich_activity
@@ -33,10 +34,20 @@ class ToolContext:
     plan: PlanService
     garmin_factory: Callable[[], GarminProvider]
     today: date
+    # Canal de WhatsApp, inyectado por el worker. Sin ellos, las acciones que lo necesitan se rechazan.
+    confirmed: bool = False  # True solo al ejecutar una acción que el atleta confirmó con el botón
+    request_confirmation: Callable[[str, dict, str], None] | None = None  # (herramienta, args, resumen)
+    send_image: Callable[[bytes, str], str | None] | None = None  # (png, pie) -> error o None
 
     @property
     def garmin(self) -> GarminProvider:
         return self.plan.garmin
+
+
+# Acciones que escriben en Garmin: solo se ejecutan tras el botón "Confirmar".
+CONFIRMED_TOOLS = {"generate_week", "modify_session", "create_and_schedule_workout", "change_garmin_schedule"}
+RESUMEN = {"type": "string", "description": "Frase corta en español para el atleta con lo que se hará, "
+                                            "p. ej. 'Mover el fondo del sábado 25 al domingo 26'."}
 
 
 @dataclass
@@ -327,6 +338,28 @@ def create_and_schedule_workout(ctx: ToolContext, args: dict) -> Any:
     ctx.garmin.schedule_workout(workout_id, date.fromisoformat(session["date"]))
     ctx.repo.save_adhoc_workout(session, workout_id)  # para que el agente lo vea después
     return {"ok": True, "garmin_workout_id": workout_id}
+
+
+def send_chart(ctx: ToolContext, args: dict) -> Any:
+    from coach.reports import charts  # matplotlib: solo cuando hace falta
+
+    if ctx.send_image is None:
+        return {"error": "No puedo enviar imágenes en este canal."}
+    if args["kind"] == "fitness":
+        acts = ctx.repo.activities(ctx.today - timedelta(days=120), ctx.today)
+        if not acts:
+            return {"error": "Aún no hay entrenamientos recientes para la gráfica de forma."}
+        series = load.fitness_series(acts, ctx.today - timedelta(days=90), ctx.today)
+        png, default_caption = charts.fitness(series[-90:]), "Tu forma física de los últimos 90 días"
+    else:
+        runs = [a for a in ctx.repo.activities(ctx.today - timedelta(days=120), ctx.today)
+                if a.get("sport") == "running"]
+        trend = cadence_mod.cadence_trend(runs)
+        if len(trend) < 3:
+            return {"error": "Aún no hay suficientes carreras con cadencia para la gráfica."}
+        png, default_caption = charts.cadence(trend[-30:]), "Tu cadencia en las últimas carreras"
+    error = ctx.send_image(png, args.get("caption") or default_caption)
+    return {"error": error} if error else {"ok": True, "enviada": args["kind"]}
 
 
 # ---------------------------------------------------------------------------- calendario de Garmin
@@ -630,15 +663,23 @@ TOOLS: list[Tool] = [
                   "y envía el reporte HTML por correo. Requiere perfil con distancia, fecha y días.",
                   _obj({"publish_to_garmin": {"type": "boolean"}, "send_email": {"type": "boolean"}})),
          generate_training_plan),
-    Tool(ToolSpec("generate_week", "Genera (o regenera con ajustes) el microciclo de una semana y lo publica en Garmin.",
+    Tool(ToolSpec("generate_week", "Genera (o regenera con ajustes) el microciclo de una semana y lo publica en Garmin. "
+                  "Pide confirmación con botones antes de publicar.",
                   _obj({"week_start": {"type": "string"}, "adjustments": {"type": "string"},
-                        "publish_to_garmin": {"type": "boolean"}})), generate_week),
-    Tool(ToolSpec("modify_session", "Mueve, elimina o reemplaza una sesión de la semana y actualiza Garmin.",
+                        "publish_to_garmin": {"type": "boolean"}, "resumen": RESUMEN}, ["resumen"])), generate_week),
+    Tool(ToolSpec("modify_session", "Mueve, elimina o reemplaza una sesión de la semana y actualiza Garmin. "
+                  "Pide confirmación con botones antes de ejecutarse.",
                   _obj({"date": {"type": "string"}, "action": {"type": "string", "enum": ["move", "remove", "replace"]},
-                        "new_date": {"type": "string"}, "session": _SESSION, "reason": {"type": "string"}},
-                       ["date", "action"])), modify_session),
-    Tool(ToolSpec("create_and_schedule_workout", "Crea un entrenamiento estructurado puntual y lo agenda en Garmin.",
-                  _obj({"session": _SESSION}, ["session"])), create_and_schedule_workout),
+                        "new_date": {"type": "string"}, "session": _SESSION, "reason": {"type": "string"},
+                        "resumen": RESUMEN}, ["date", "action", "resumen"])), modify_session),
+    Tool(ToolSpec("create_and_schedule_workout", "Crea un entrenamiento estructurado puntual y lo agenda en Garmin. "
+                  "Pide confirmación con botones antes de ejecutarse.",
+                  _obj({"session": _SESSION, "resumen": RESUMEN}, ["session", "resumen"])), create_and_schedule_workout),
+    Tool(ToolSpec("send_chart",
+                  "Envía al atleta por WhatsApp una gráfica: 'fitness' (forma física, CTL/ATL/TSB) o 'cadence' "
+                  "(tendencia de cadencia). Úsala cuando pida ver una gráfica.",
+                  _obj({"kind": {"type": "string", "enum": ["fitness", "cadence"]},
+                        "caption": {"type": "string"}}, ["kind"])), send_chart),
     Tool(ToolSpec("send_plan_report", "Envía por correo el reporte HTML actualizado del plan.",
                   _obj({"reason": {"type": "string"}})), send_plan_report),
     Tool(ToolSpec("get_personal_records",
@@ -670,13 +711,13 @@ TOOLS: list[Tool] = [
          get_scheduled_workouts),
     Tool(ToolSpec("change_garmin_schedule",
                   "Quita o mueve en el calendario de Garmin un entrenamiento ya agendado, sin borrar la plantilla. "
-                  "Solo después de que el atleta lo confirme. Para cambiar el contenido usa modify_session.",
+                  "Pide confirmación con botones antes de ejecutarse. Para cambiar el contenido usa modify_session.",
                   _obj({"date": {"type": "string", "description": "Fecha actual del entrenamiento (YYYY-MM-DD)"},
                         "action": {"type": "string", "enum": ["unschedule", "reschedule"]},
                         "new_date": {"type": "string", "description": "Solo para reschedule (YYYY-MM-DD)"},
                         "workout_id": {"type": "string", "description": "Si hay varios entrenamientos ese día"},
-                        "reason": {"type": "string"}},
-                       ["date", "action"])), change_garmin_schedule),
+                        "reason": {"type": "string"}, "resumen": RESUMEN},
+                       ["date", "action", "resumen"])), change_garmin_schedule),
     Tool(ToolSpec("get_performance_metrics",
                   "Métricas que calcula Garmin: VO2max, predicciones de carrera 5k-maratón, estado de entrenamiento "
                   "y umbral de lactato. Algunas dependen del reloj; lo que falte aparece en sin_dato.",
@@ -701,6 +742,12 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> tuple[str, bool]:
     tool = TOOLS_BY_NAME.get(name)
     if not tool:
         return f"Herramienta desconocida: {name}", True
+    if name in CONFIRMED_TOOLS and not ctx.confirmed:
+        if ctx.request_confirmation is None:
+            return "Esta acción necesita confirmación del atleta y aquí no puedo pedirla.", True
+        ctx.request_confirmation(name, args, args.get("resumen") or f"Ejecutar {name}")
+        return json.dumps({"pendiente": "Envié los botones Confirmar y Cancelar al atleta. No repitas la "
+                                        "acción: espera su respuesta."}, ensure_ascii=False), False
     try:
         result = tool.handler(ctx, args)
         return json.dumps(result, ensure_ascii=False, default=str), False

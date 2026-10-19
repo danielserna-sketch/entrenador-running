@@ -47,6 +47,15 @@ class OpenAILLM:
         return json.loads(message.content)
 
 
+def _openai_content(m: ChatMessage):
+    if not m.images:
+        return m.text
+    parts = [{"type": "text", "text": m.text}]
+    parts += [{"type": "image_url", "image_url": {"url": f"data:{img.media_type};base64,{img.data_b64}"}}
+              for img in m.images]
+    return parts
+
+
 class OpenAISession:
     def __init__(self, llm: OpenAILLM, system: SystemPrompt, history: list[ChatMessage],
                  tools: list[ToolSpec], tier: Tier):
@@ -55,7 +64,7 @@ class OpenAISession:
         self.tools = [{"type": "function", "function": {
             "name": t.name, "description": t.description, "parameters": t.input_schema}} for t in tools]
         self.messages: list[dict] = [{"role": "system", "content": llm._system_text(system)}]
-        self.messages += [{"role": m.role, "content": m.text} for m in history]
+        self.messages += [{"role": m.role, "content": _openai_content(m)} for m in history]
 
     def step(self) -> StepResult:
         kwargs = {"model": self.model, "messages": self.messages, "max_completion_tokens": MAX_TOKENS}

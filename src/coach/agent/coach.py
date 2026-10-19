@@ -12,7 +12,7 @@ from datetime import date, datetime
 from coach.agent import athlete_profile, prompts
 from coach.agent.tools import TOOLS, ToolContext, run_tool
 from coach.garmin.provider import GarminProvider
-from coach.llm.base import ChatMessage, LLMClient, ToolResult
+from coach.llm.base import ChatMessage, ImageInput, LLMClient, ToolResult
 from coach.planning.service import PlanService
 from coach.storage.repo import Repo
 
@@ -37,6 +37,9 @@ class Coach:
     llm: LLMClient
     garmin_factory: Callable[[], GarminProvider]
     now: datetime
+    # Canal de WhatsApp: los pone el worker. Sin ellos, el agente no puede pedir confirmación ni enviar gráficas.
+    request_confirmation: Callable | None = None
+    send_image: Callable | None = None
 
     @property
     def today(self) -> date:
@@ -48,16 +51,20 @@ class Coach:
         conversation = self.repo.get_conversation().get("summary", "")
         return prompts.build_system(ficha, summary, conversation)
 
-    def _context(self, system) -> ToolContext:
+    def _context(self, system, *, confirmed: bool = False) -> ToolContext:
         plan = PlanService(self.repo, self.llm, system, self.garmin_factory, self.today)
-        return ToolContext(repo=self.repo, plan=plan, garmin_factory=self.garmin_factory, today=self.today)
+        return ToolContext(repo=self.repo, plan=plan, garmin_factory=self.garmin_factory, today=self.today,
+                           confirmed=confirmed, request_confirmation=self.request_confirmation,
+                           send_image=self.send_image)
 
-    def run(self, user_text: str, *, history: list[ChatMessage] | None = None, tier: str = "main") -> str:
+    def run(self, user_text: str, *, history: list[ChatMessage] | None = None, tier: str = "main",
+            images: list[ImageInput] | None = None) -> str:
         """Ejecuta un turno completo: el modelo puede llamar herramientas hasta dar la respuesta final."""
         started = time.perf_counter()
         system = self._system()
         ctx = self._context(system)
-        messages = list(history or []) + [ChatMessage("user", prompts.turn_context(self.now) + user_text)]
+        turn = ChatMessage("user", prompts.turn_context(self.now) + user_text, images=list(images or []))
+        messages = list(history or []) + [turn]
         session = self.llm.session(system, messages, [t.spec for t in TOOLS], tier=tier)  # type: ignore[arg-type]
         text = ""
         usage = {"steps": 0, "input": 0, "cache_read": 0, "output": 0,
@@ -120,9 +127,23 @@ class Coach:
         log.info("Historial compactado: %s mensajes resumidos", len(old))
         return keep
 
-    def reply_to_user(self, user_text: str) -> str:
+    def reply_to_user(self, user_text: str, *, images: list[ImageInput] | None = None,
+                      stored_text: str | None = None) -> str:
+        """`stored_text` es lo que queda en el historial (p. ej. "[foto] pie"); el modelo ve `user_text`."""
         history = self._history()
-        self.repo.add_message("user", user_text)
-        answer = self.run(user_text, history=history)
+        self.repo.add_message("user", stored_text or user_text)
+        answer = self.run(user_text, history=history, images=images)
         self.repo.add_message("assistant", answer)
         return answer
+
+    def execute_confirmed(self, pending: dict) -> str:
+        """Ejecuta la acción que el atleta confirmó con el botón y deja que el agente le informe."""
+        system = self._system()
+        ctx = self._context(system, confirmed=True)
+        content, is_error = run_tool(ctx, pending["tool"], pending["args"])
+        garmin = ctx.plan._garmin
+        if garmin is not None and hasattr(garmin, "close"):
+            garmin.close()
+        note = (f"[El atleta confirmó: {pending.get('summary', pending['tool'])}. "
+                f"Resultado{' (error)' if is_error else ''}: {content}] Infórmale en breve qué pasó.")
+        return self.reply_to_user(note, stored_text=note)

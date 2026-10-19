@@ -97,6 +97,19 @@ class Repo:
         except self.table.meta.client.exceptions.ConditionalCheckFailedException:
             return False
 
+    # ---- acciones pendientes de confirmación ----------------------------
+    def put_pending(self, pending_id: str, data: dict, ttl_seconds: int) -> None:
+        item = {"PK": self.pk, "SK": f"PENDING#{pending_id}", **to_dynamo(data),
+                "ttl": int(time.time()) + ttl_seconds}
+        self.table.put_item(Item=item)
+
+    def take_pending(self, pending_id: str) -> dict | None:
+        """Lo borra y lo devuelve en una sola operación: solo el primer toque lo obtiene."""
+        resp = self.table.delete_item(Key={"PK": self.pk, "SK": f"PENDING#{pending_id}"},
+                                      ReturnValues="ALL_OLD")
+        item = resp.get("Attributes")
+        return _strip(item) if item else None
+
     # ---- perfil, memoria, zonas -----------------------------------------
     def get_profile(self) -> dict:
         return self.get("PROFILE") or {}

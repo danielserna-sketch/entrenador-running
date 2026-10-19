@@ -37,6 +37,30 @@ class WhatsAppClient:
             resp.raise_for_status()
         return resp.json()
 
+    def send_buttons(self, to: str, body: str, buttons: list[tuple[str, str]]) -> None:
+        """Mensaje con hasta 3 botones de respuesta. Cada botón es (id, título ≤ 20 caracteres)."""
+        self._post({"to": to, "type": "interactive", "interactive": {
+            "type": "button",
+            "body": {"text": body[:1024]},
+            "action": {"buttons": [{"type": "reply", "reply": {"id": bid, "title": title[:20]}}
+                                   for bid, title in buttons[:3]]},
+        }})
+
+    def upload_media(self, data: bytes, mime_type: str = "image/png") -> str:
+        """Sube un archivo a Meta y devuelve su media id (para enviarlo después)."""
+        resp = self.http.post(f"{self.base}/media",
+                              data={"messaging_product": "whatsapp", "type": mime_type},
+                              files={"file": ("imagen", data, mime_type)},
+                              headers={"Authorization": f"Bearer {self.token}"})
+        if resp.status_code >= 400:
+            log.error("WhatsApp upload %s: %s", resp.status_code, resp.text)
+            resp.raise_for_status()
+        return resp.json()["id"]
+
+    def send_image(self, to: str, media_id: str, caption: str = "") -> None:
+        image = {"id": media_id, **({"caption": caption[:1024]} if caption else {})}
+        self._post({"to": to, "type": "image", "image": image})
+
     def download_media(self, media_id: str) -> bytes:
         """Descarga un archivo recibido: primero pide su URL temporal a Meta y luego la baja."""
         headers = {"Authorization": f"Bearer {self.token}"}
@@ -123,14 +147,21 @@ def parse_incoming(payload: dict) -> list[dict]:
                 text = None
                 if kind == "text":
                     text = msg["text"]["body"]
-                elif kind == "interactive":
+                button_id = None
+                if kind == "interactive":
                     inter = msg.get("interactive", {})
-                    text = (inter.get("button_reply") or inter.get("list_reply") or {}).get("title")
+                    reply = inter.get("button_reply") or inter.get("list_reply") or {}
+                    text, button_id = reply.get("title"), reply.get("id")
                 elif kind == "button":
                     text = msg.get("button", {}).get("text")
                 item = {"id": msg["id"], "from": msg["from"], "type": kind, "text": text,
                         "timestamp": msg.get("timestamp")}
-                if kind == "audio":
-                    item["media_id"] = msg["audio"]["id"]
+                if button_id:
+                    item["button_id"] = button_id
+                if kind in ("audio", "image"):
+                    item["media_id"] = msg[kind]["id"]
+                if kind == "image":
+                    item["mime_type"] = msg["image"].get("mime_type", "image/jpeg")
+                    item["caption"] = msg["image"].get("caption")
                 out.append(item)
     return out

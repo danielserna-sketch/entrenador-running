@@ -1,3 +1,4 @@
+import base64
 import json
 from types import SimpleNamespace
 from typing import ClassVar
@@ -79,9 +80,13 @@ class FakeWA:
 class FakeCoach:
     def __init__(self):
         self.asked = []
+        self.images = []
+        self.stored = []
 
-    def reply_to_user(self, text):
+    def reply_to_user(self, text, *, images=None, stored_text=None):
         self.asked.append(text)
+        self.images.append(images or [])
+        self.stored.append(stored_text or text)
         return "respuesta"
 
 
@@ -118,5 +123,23 @@ def test_voice_note_download_failure_tells_user(monkeypatch):
 
 
 def test_unsupported_media_still_gets_text_only_reply(monkeypatch):
-    _, wa, coach = _run(monkeypatch, {"id": "w4", "type": "image", "text": None})
+    _, wa, coach = _run(monkeypatch, {"id": "w4", "type": "sticker", "text": None})
     assert coach.asked == [] and wa.sent == [agent_worker.NON_TEXT_MSG]
+
+
+def test_photo_is_sent_to_agent_once_and_stored_as_caption(monkeypatch):
+    _, wa, coach = _run(monkeypatch, {"id": "w5", "type": "image", "media_id": "img1",
+                                      "mime_type": "image/png", "caption": "¿qué marca es esta?"})
+    assert wa.downloads == ["img1"]
+    assert coach.asked == ["¿qué marca es esta?"]
+    assert coach.stored == ["[foto] ¿qué marca es esta?"]
+    image = coach.images[0][0]
+    assert image.media_type == "image/png" and image.data_b64 == base64.b64encode(b"ogg").decode()
+    assert wa.sent == ["respuesta"]
+
+
+def test_photo_too_big_is_refused(monkeypatch):
+    big = b"x" * (agent_worker.IMAGE_MAX_BYTES + 1)
+    monkeypatch.setattr(FakeWA, "download_media", lambda self, media_id: big)
+    _, wa, coach = _run(monkeypatch, {"id": "w6", "type": "image", "media_id": "img2", "caption": ""})
+    assert coach.asked == [] and wa.sent == [agent_worker.IMAGE_TOO_BIG_MSG]

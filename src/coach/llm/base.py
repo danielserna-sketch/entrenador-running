@@ -34,10 +34,18 @@ class ToolResult:
     is_error: bool = False
 
 
+@dataclass(frozen=True)
+class ImageInput:
+    media_type: str  # image/jpeg, image/png, image/webp...
+    data_b64: str
+
+
 @dataclass
 class ChatMessage:
     role: Literal["user", "assistant"]
     text: str
+    # Solo se usan en el turno actual: el historial guarda el texto, nunca los bytes.
+    images: list[ImageInput] = field(default_factory=list)
 
 
 @dataclass

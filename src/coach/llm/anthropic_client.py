@@ -75,7 +75,8 @@ class AnthropicSession:
         self.system = llm._system_blocks(system)
         self.tools = [{"name": t.name, "description": t.description, "input_schema": t.input_schema}
                       for t in tools]
-        self.messages: list[dict] = _merge_roles([{"role": m.role, "content": m.text} for m in history])
+        self.messages: list[dict] = _merge_roles([{"role": m.role, "content": _anthropic_content(m)}
+                                                  for m in history])
 
     def step(self) -> StepResult:
         kwargs = {"system": self.system, "messages": self.messages}
@@ -105,12 +106,29 @@ class AnthropicSession:
         ]})
 
 
+def _anthropic_content(m: ChatMessage):
+    if not m.images:
+        return m.text
+    # Las imágenes van antes del texto, como recomienda la documentación.
+    blocks = [{"type": "image", "source": {"type": "base64", "media_type": img.media_type, "data": img.data_b64}}
+              for img in m.images]
+    return blocks + [{"type": "text", "text": m.text}]
+
+
+def _as_blocks(content) -> list[dict]:
+    return [{"type": "text", "text": content}] if isinstance(content, str) else list(content)
+
+
 def _merge_roles(messages: list[dict]) -> list[dict]:
     """La API exige alternar user/assistant y empezar por user."""
     merged: list[dict] = []
     for m in messages:
         if merged and merged[-1]["role"] == m["role"]:
-            merged[-1]["content"] += "\n\n" + m["content"]
+            prev, new = merged[-1]["content"], m["content"]
+            if isinstance(prev, str) and isinstance(new, str):
+                merged[-1]["content"] = prev + "\n\n" + new
+            else:
+                merged[-1]["content"] = _as_blocks(prev) + _as_blocks(new)
         else:
             merged.append(dict(m))
     while merged and merged[0]["role"] != "user":
