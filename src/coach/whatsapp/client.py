@@ -23,7 +23,8 @@ class WhatsAppClient:
         creds = creds or secrets.get_secret(settings.secret_whatsapp)
         self.token = creds["access_token"]
         self.phone_number_id = creds["phone_number_id"]
-        self.base = f"https://graph.facebook.com/{settings.graph_api_version}/{self.phone_number_id}"
+        self.graph = f"https://graph.facebook.com/{settings.graph_api_version}"
+        self.base = f"{self.graph}/{self.phone_number_id}"
         self.template_name = settings.template_name
         self.template_lang = settings.template_lang
         self.http = http or httpx.Client(timeout=20)
@@ -35,6 +36,15 @@ class WhatsAppClient:
             log.error("WhatsApp API %s: %s", resp.status_code, resp.text)
             resp.raise_for_status()
         return resp.json()
+
+    def download_media(self, media_id: str) -> bytes:
+        """Descarga un archivo recibido: primero pide su URL temporal a Meta y luego la baja."""
+        headers = {"Authorization": f"Bearer {self.token}"}
+        info = self.http.get(f"{self.graph}/{media_id}", headers=headers)
+        info.raise_for_status()
+        resp = self.http.get(info.json()["url"], headers=headers)
+        resp.raise_for_status()
+        return resp.content
 
     def send_text(self, to: str, text: str) -> None:
         for chunk in split_message(text):
@@ -118,6 +128,9 @@ def parse_incoming(payload: dict) -> list[dict]:
                     text = (inter.get("button_reply") or inter.get("list_reply") or {}).get("title")
                 elif kind == "button":
                     text = msg.get("button", {}).get("text")
-                out.append({"id": msg["id"], "from": msg["from"], "type": kind, "text": text,
-                            "timestamp": msg.get("timestamp")})
+                item = {"id": msg["id"], "from": msg["from"], "type": kind, "text": text,
+                        "timestamp": msg.get("timestamp")}
+                if kind == "audio":
+                    item["media_id"] = msg["audio"]["id"]
+                out.append(item)
     return out

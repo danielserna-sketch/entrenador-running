@@ -4,7 +4,7 @@ Agente que actúa como entrenador personal de running:
 
 - **Garmin Connect**: lee actividades, sueño, HRV, Body Battery y readiness; crea y agenda entrenamientos estructurados en tu calendario (llegan al reloj); carga tus zonas de FC.
 - **Strava** (solo lectura): descarga todo tu historial de carreras y calcula tus récords por distancia (400 m a 50 K), la evolución de tus ritmos y tu volumen por mes y año. El agente usa esas marcas para el diagnóstico del plan.
-- **WhatsApp**: conversas con él (Meta WhatsApp Cloud API).
+- **WhatsApp**: conversas con él por texto o nota de voz (Meta WhatsApp Cloud API). Las notas se transcriben con Whisper de OpenAI; el audio no se guarda, solo el texto.
 - **Metodología "Corriendo conCiencia" (Andrés Ramírez)**: test de 20 min (pace×1.05, FC×0.95), zonas Joe Friel, ciclos Base → Construcción → Específico, cumplimiento por colores sobre TSS, frecuencia según nivel y cadencia con metrónomo (+2-3 rpm). Ver [`correr_conciencia.md`](src/coach/methodology/correr_conciencia.md) y [`rules.py`](src/coach/methodology/rules.py). Lo que el método no publica está marcado como `SUPUESTO`.
 - **Plan personalizado**: diagnóstico, macrociclo determinista, semana generada por el LLM y revisada por un validador de reglas, y publicación en Garmin.
 - **Reporte HTML por correo** (Amazon SES): se envía al crear el plan, cada domingo y en cada replanificación. Ver el [ejemplo](docs/ejemplo_reporte_plan.html).
