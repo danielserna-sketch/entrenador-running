@@ -12,3 +12,6 @@ strava*.json
 
 # Exportaciones personales (Strava, GPS)
 Contexto/
+
+# macOS
+.DS_Store
