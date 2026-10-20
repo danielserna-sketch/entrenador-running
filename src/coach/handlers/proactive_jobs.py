@@ -1,7 +1,7 @@
 """Lambda programada para los trabajos proactivos.
 
 Evento: {"job": "morning_brief" | "weekly_review" | "alerts"}
-- morning_brief: todos los días 6:00 (hora local).
+- morning_brief: todos los días 5:00 (hora local).
 - weekly_review: domingos 18:00 → genera y publica la próxima semana y envía el reporte.
 - alerts: todos los días 20:00 (además del chequeo tras cada actividad).
 """
@@ -11,10 +11,19 @@ from __future__ import annotations
 import logging
 
 from coach.garmin.provider import GarminAuthError
-from coach.handlers import proactive
+from coach.handlers import garmin_sync, proactive
 from coach.handlers.common import make_coach
 
 log = logging.getLogger()
+
+
+def _sync_garmin_before_brief(context) -> None:
+    """El resumen de la mañana debe leer el reloj al día. Sincroniza antes, sin repetir el análisis de
+    actividades (esas ya llegan con el sync cada 30 min)."""
+    try:
+        garmin_sync.handler({"skip_analysis": True, "days_back": 2}, context)
+    except Exception:
+        log.exception("Sync de Garmin previo al resumen falló; el resumen usa los datos guardados")
 
 
 def handler(event, context):
@@ -24,6 +33,7 @@ def handler(event, context):
         return {"ok": True, "skipped": "sin perfil todavía"}
     try:
         if job == "morning_brief":
+            _sync_garmin_before_brief(context)
             text = proactive.morning_brief(coach)
         elif job == "weekly_review":
             if not coach.repo.get_macro():
