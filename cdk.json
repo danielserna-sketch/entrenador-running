@@ -13,7 +13,7 @@
       "llm_model_fast": "",
       "whatsapp_template": "coach_update",
       "whatsapp_template_lang": "es_CO",
-      "morning_cron": "cron(15 6 * * ? *)",
+      "morning_cron": "cron(0 5 * * ? *)",
       "weekly_cron": "cron(0 18 ? * SUN *)",
       "monthly_budget_usd": 30
     }
